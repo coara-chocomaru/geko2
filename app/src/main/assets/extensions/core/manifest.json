@@ -1,0 +1,32 @@
+{
+  "manifest_version": 2,
+  "name": "Coara Core",
+  "version": "1.0.0",
+  "description": "Coara Browser built-in page agent",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "core@coara.browser2"
+    }
+  },
+  "permissions": [
+    "nativeMessaging",
+    "nativeMessagingFromContent",
+    "geckoViewAddons",
+    "cookies",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ],
+  "content_security_policy": "script-src 'self' 'unsafe-eval'; object-src 'self'",
+  "web_accessible_resources": ["pages/*"]
+}
