@@ -1,1 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <item
+        android:id="@+id/action_add_bookmark"
+        android:title="ブックマーク登録" />
+    <item android:title="ブックマーク管理">
+        <menu>
+            <item
+                android:id="@+id/action_bookmark_management"
+                android:title="ブックマーク" />
+            <item
+                android:id="@+id/action_export"
+                android:title="エクスポート" />
+            <item
+                android:id="@+id/action_import"
+                android:title="インポート" />
+        </menu>
+    </item>
+    <item android:id="@+id/action_find_in_page" android:title="ページ内検索" />
+    <item android:id="@+id/action_screenshot" android:title="スクリーンショット" />
+    <item android:id="@+id/action_history" android:title="ページ履歴" />
+    <item android:id="@+id/action_downloads" android:title="ダウンロード一覧" />
+
+    <item android:title="表示設定">
+        <menu>
+            <item android:id="@+id/action_dark_mode" android:title="ダークモード" android:checkable="true" />
+            <item android:id="@+id/action_zoom_toggle" android:title="ズーム" android:checkable="true" />
+            <item android:id="@+id/action_negapoji" android:title="ネガポジ" />
+            <item android:id="@+id/action_deskua" android:title="デスクトップ表示" android:checkable="true" />
+            <item android:id="@+id/action_ct3ua" android:title="CT3UA" android:checkable="true" />
+            <item android:id="@+id/action_translate" android:title="日本語に翻訳" />
+        </menu>
+    </item>
+
+    <item android:title="軽量オプション">
+        <menu>
+            <item android:id="@+id/action_ua" android:title="ガラケーUA" android:checkable="true" />
+            <item android:id="@+id/action_js" android:title="Javascript" android:checkable="true" />
+            <item android:id="@+id/action_img" android:title="画像ブロック" android:checkable="true" />
+        </menu>
+    </item>
+
+    <item android:title="入力・操作">
+        <menu>
+            <item android:id="@+id/action_keyboard_settings" android:title="キーボード設定" />
+            <item android:id="@+id/action_touchpad" android:title="タッチパッドボタン" />
+        </menu>
+    </item>
+
+    <item android:title="ツール">
+        <menu>
+            <item android:id="@+id/action_Secret" android:title="シークレット解除" />
+            <item android:id="@+id/action_pgdl" android:title="ページ保存" />
+            <item android:id="@+id/action_basic_auth" android:title="basicモード" android:checkable="true" />
+            <item android:id="@+id/action_plugins" android:title="拡張機能" />
+            <item android:id="@+id/action_plugin_commands" android:title="拡張機能コマンド" />
+            <item android:id="@+id/action_txtphoto" android:title="TXT→画像" />
+            <item android:id="@+id/action_asciiart" android:title="画像→TXT" />
+            <item android:id="@+id/action_htmlview" android:title="htmlview" />
+            <item android:id="@+id/action_qr" android:title="QRコード" />
+            <item android:id="@+id/action_num" android:title="電卓" />
+            <item android:id="@+id/action_grep" android:title="grep-i/md5" />
+            <item android:id="@+id/action_exec" android:title="exec" />
+        </menu>
+    </item>
+
+    <item android:title="履歴消去">
+        <menu>
+            <item android:id="@+id/action_Dhistory" android:title="ダウンロード履歴消去" />
+            <item android:id="@+id/action_clear_history" android:title="完全履歴消去" />
+        </menu>
+    </item>
+
+    <item android:id="@+id/action_Settings" android:title="info" />
+
+</menu>
