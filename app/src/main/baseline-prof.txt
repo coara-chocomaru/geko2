@@ -1,0 +1,4 @@
+HSPLcom/coara/browser2/MainActivity**->**(**)**
+HSPLcom/coara/browser2/BrowserApplication;->**(**)**
+HSPLcom/coara/browser2/util/**->**(**)**
+HSPLcom/coara/browser2/webview/**->**(**)**
