@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <script src="../content.js"></script>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+  <title>スタートページ</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      overscroll-behavior: none;
+      touch-action: none;
+    }
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: linear-gradient(135deg, #ff9a9e 0%, #fad0c4 100%);
+      font-family: "Comic Sans MS", cursive, sans-serif;
+      position: relative;
+      animation: bgShift 20s ease-in-out infinite;
+      background-size: cover;
+      background-position: center;
+    }
+    @keyframes bgShift {
+      0% { filter: hue-rotate(0deg) contrast(1); }
+      50% { filter: hue-rotate(20deg) contrast(1.1); }
+      100% { filter: hue-rotate(0deg) contrast(1); }
+    }
+    .container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      z-index: 10;
+      animation: fadeInUp 1s ease-out;
+    }
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    #logo {
+      font-size: 18px;
+      margin-bottom: 10px;
+      cursor: pointer;
+      transition: transform 0.5s ease;
+    }
+    @keyframes rotateLogo {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    form { text-align: center; }
+    .search-container {
+      position: relative;
+      display: inline-block;
+    }
+    input[type="text"] {
+      width: 80vw;
+      max-width: 300px;
+      padding: 10px 20px 10px 20px;
+      padding-right: 70px;
+      font-size: 16px;
+      border: 2px solid #ffb6c1;
+      border-radius: 30px;
+      outline: none;
+      transition: all 0.3s ease;
+      background: #fff;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    input[type="text"]::placeholder { color: #ffb6c1; }
+    input[type="text"]:focus {
+      border-color: #ff69b4;
+      box-shadow: 0 6px 8px rgba(255,105,180,0.4);
+    }
+    #goButton {
+      position: absolute;
+      right: 5px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: #ff69b4;
+      border: none;
+      color: white;
+      padding: 8px 12px;
+      border-radius: 20px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background 0.2s ease;
+    }
+    #goButton:hover {
+      background: #ff85c0;
+    }
+    .fluffy {
+      position: absolute;
+      pointer-events: none;
+      animation-timing-function: ease-in-out;
+      will-change: transform, opacity;
+    }
+    .fluffy.snow { animation: floatSnow 8s forwards; }
+    @keyframes floatSnow {
+      0% { transform: translateY(0) rotate(0deg); opacity: 0.8; }
+      100% { transform: translateY(100vh) rotate(360deg); opacity: 0; }
+    }
+    .fluffy.feather { animation: floatFeather 8s forwards; }
+    @keyframes floatFeather {
+      0% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 0.8; }
+      100% { transform: translateY(-100vh) translateX(20vw) rotate(30deg); opacity: 0; }
+    }
+    .fluffy.petal { animation: floatPetal 8s forwards; }
+    @keyframes floatPetal {
+      0% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 0.8; }
+      50% { transform: translateY(50vh) translateX(10vw) rotate(15deg); }
+      100% { transform: translateY(100vh) translateX(0) rotate(0deg); opacity: 0; }
+    }
+    .fluffy.bubble { animation: floatBubble 8s forwards; }
+    @keyframes floatBubble {
+      0% { transform: translateY(0) scale(0.5); opacity: 0.8; }
+      100% { transform: translateY(-100vh) scale(1); opacity: 0; }
+    }
+    .fluffy.leaf { animation: floatLeaf 8s forwards; }
+    @keyframes floatLeaf {
+      0% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 0.8; }
+      100% { transform: translateY(100vh) translateX(-10vw) rotate(360deg); opacity: 0; }
+    }
+    .fluffy.star { animation: floatStar 8s forwards; }
+    @keyframes floatStar {
+      0% { transform: translateY(0) scale(1); opacity: 0.8; }
+      100% { transform: translateY(-50vh) scale(1.5); opacity: 0; }
+    }
+    .fluffy.cloud { animation: floatCloud 8s forwards; }
+    @keyframes floatCloud {
+      0% { transform: translateX(0) scale(1); opacity: 0.6; }
+      100% { transform: translateX(50vw) scale(1.2); opacity: 0; }
+    }
+    .fluffy.sparkle { animation: floatSparkle 8s forwards; }
+    @keyframes floatSparkle {
+      0% { transform: scale(0); opacity: 1; }
+      50% { transform: scale(1); opacity: 1; }
+      100% { transform: scale(0); opacity: 0; }
+    }
+    .fluffy.bird { animation: floatBird 12s linear forwards; }
+    @keyframes floatBird {
+      0% { transform: translate(-20vw, 0); opacity: 0; }
+      10% { opacity: 1; }
+      50% { transform: translate(50vw, -5vh); opacity: 1; }
+      90% { opacity: 1; }
+      100% { transform: translate(120vw, 0); opacity: 0; }
+    }
+    #engineToggle {
+      margin-top: 10px;
+      padding: 8px 14px;
+      border: none;
+      border-radius: 20px;
+      background: #d45b66;
+      color: white;
+      cursor: pointer;
+      z-index: 20;
+      font-size: 14px;
+      transition: background 0.2s ease;
+    }
+    #engineToggle:hover { background: #c14a57; }
+    #engineSelector {
+      display: none;
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: rgba(255,255,255,0.9);
+      padding: 10px;
+      border-radius: 10px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+      z-index: 20;
+    }
+    #engineSelector button {
+      background: #f5c0c7;
+      border: 1px solid #d45b66;
+      border-radius: 5px;
+      padding: 8px 12px;
+      margin: 4px 0;
+      cursor: pointer;
+      font-size: 14px;
+      transition: transform 0.2s ease, background 0.2s ease;
+      width: 100%;
+    }
+    #engineSelector button:hover {
+      background: #e0a3aa;
+      transform: scale(1.05);
+    }
+    #notification {
+      display: none;
+      position: fixed;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.6);
+      color: white;
+      padding: 10px;
+      border-radius: 5px;
+      z-index: 30;
+      font-size: 14px;
+    }
+    #bgSelector, #bgClear {
+      margin-top: 10px;
+      padding: 8px 14px;
+      border: none;
+      border-radius: 20px;
+      background: #4caf50;
+      color: white;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background 0.2s ease;
+      z-index: 20;
+    }
+    #bgClear {
+      background: #f44336;
+      margin-left: 10px;
+    }
+    #bgSelector:hover { background: #66bb6a; }
+    #bgClear:hover { background: #e57373; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="logo">Coara browser</div>
+    <form id="searchForm" action="https://www.google.com/search" method="get">
+      <div class="search-container">
+        <input type="text" name="q" id="searchInput" placeholder="Googleで検索" autofocus>
+        <button type="submit" id="goButton">Go</button>
+      </div>
+    </form>
+    <input type="file" id="bgSelector" accept="image/*">
+    <button id="bgClear">背景をクリア</button>
+    <button id="engineToggle">検索エンジン選択</button>
+  </div>
+  <div id="engineSelector">
+    <button data-engine="google">Google</button>
+    <button data-engine="bing">Bing</button>
+    <button data-engine="yahoo">Yahoo</button>
+    <button data-engine="duckduckgo">DuckDuckGo</button>
+    <button data-engine="ecosia">Ecosia</button>
+  </div>
+  <div id="notification">検索エンジンを変更しました</div>
+  <script>
+    document.getElementById('logo').addEventListener('click', function() {
+      this.style.animation = 'rotateLogo 1s linear';
+      this.addEventListener('animationend', () => this.style.animation = '', { once: true });
+    });
+
+    const patterns = ['snow', 'feather', 'petal', 'bubble', 'leaf', 'star', 'cloud', 'sparkle'];
+    const patternSymbols = { snow: '❄', feather: '🪶', petal: '❀', bubble: '○', leaf: '🍂', star: '★', cloud: '☁', sparkle: '✨', bird: '🐦' };
+    const patternTop = { snow: "-10vh", feather: "110vh", petal: "-10vh", bubble: "110vh", leaf: "-10vh", star: "110vh", cloud: null, sparkle: null };
+    function createFluffy() {
+      const fluffies = document.querySelectorAll('.fluffy');
+      if (fluffies.length > 30) return;
+      const pattern = patterns[Math.floor(Math.random() * patterns.length)];
+      const div = document.createElement('div');
+      div.classList.add('fluffy', pattern);
+      div.textContent = patternSymbols[pattern];
+      div.style.left = Math.random() * 100 + 'vw';
+      div.style.top = patternTop[pattern] ? patternTop[pattern] : Math.random() * 100 + 'vh';
+      div.style.fontSize = (16 + Math.random() * 14) + 'px';
+      const duration = 8 + Math.random() * 8;
+      div.style.animationDuration = duration + 's';
+      document.body.appendChild(div);
+      setTimeout(() => div.remove(), duration * 1000);
+    }
+    setInterval(createFluffy, 1000);
+
+    function createBird() {
+      const div = document.createElement('div');
+      div.classList.add('fluffy', 'bird');
+      div.textContent = patternSymbols['bird'];
+      div.style.top = (10 + Math.random() * 60) + 'vh';
+      div.style.fontSize = '24px';
+      const duration = 12;
+      div.style.animationDuration = duration + 's';
+      document.body.appendChild(div);
+      setTimeout(() => div.remove(), duration * 1000);
+    }
+    function scheduleBird() {
+      const delay = 15000 + Math.random() * 20000;
+      setTimeout(() => { createBird(); scheduleBird(); }, delay);
+    }
+    scheduleBird();
+
+    const inputField = document.querySelector('input[type="text"]');
+    inputField.addEventListener('focus', () => inputField.style.transform = 'scale(1.05)');
+    inputField.addEventListener('blur', () => inputField.style.transform = 'scale(1)');
+
+    const searchEngines = {
+      google: { action: "https://www.google.com/search", param: "q", placeholder: "Googleで検索" },
+      bing: { action: "https://www.bing.com/search", param: "q", placeholder: "Bingで検索" },
+      yahoo: { action: "https://search.yahoo.co.jp/search", param: "p", placeholder: "Yahooで検索" },
+      duckduckgo: { action: "https://duckduckgo.com/", param: "q", placeholder: "DuckDuckGoで検索" },
+      ecosia: { action: "https://www.ecosia.org/search", param: "q", placeholder: "Ecosiaで検索" }
+    };
+    const engineToggle = document.getElementById('engineToggle');
+    const engineSelector = document.getElementById('engineSelector');
+    const notification = document.getElementById('notification');
+    const searchForm = document.getElementById('searchForm');
+    const searchInput = document.getElementById('searchInput');
+    searchForm.addEventListener('submit', e => {
+      if (!searchInput.value.trim()) e.preventDefault();
+    });
+    engineToggle.addEventListener('click', () => {
+      engineSelector.style.display = engineSelector.style.display === 'none' || engineSelector.style.display === '' ? 'flex' : 'none';
+      engineSelector.style.flexDirection = 'column';
+    });
+    engineSelector.querySelectorAll('button').forEach(button => {
+      button.addEventListener('click', () => {
+        const engineKey = button.dataset.engine;
+        if (searchEngines[engineKey]) {
+          const engine = searchEngines[engineKey];
+          searchForm.action = engine.action;
+          searchInput.name = engine.param;
+          searchInput.placeholder = engine.placeholder;
+          notification.textContent = `${engineKey} に変更しました`;
+          notification.style.display = 'block';
+          setTimeout(() => notification.style.display = 'none', 2000);
+        }
+        engineSelector.style.display = 'none';
+      });
+    });
+
+    const bgSelector = document.getElementById('bgSelector');
+    const bgClear = document.getElementById('bgClear');
+    const MAX_SIZE_LOWER = 2 * 1024 * 1024;
+    const MAX_SIZE_UPPER = 8 * 1024 * 1024;
+
+    addEventListener('DOMContentLoaded', () => {
+      const savedBg = localStorage.getItem('bgImage');
+      if (savedBg) document.body.style.backgroundImage = `url(${savedBg})`;
+    });
+
+    bgSelector.addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (!file || file.size > MAX_SIZE_UPPER) {
+        if (file.size > MAX_SIZE_UPPER) alert("8MBを超える画像はサポートしていません。");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = event => {
+        const dataUrl = event.target.result;
+        if (file.size > MAX_SIZE_LOWER) {
+          const img = new Image();
+          img.onload = () => {
+            const ratio = Math.sqrt(MAX_SIZE_LOWER / file.size);
+            const targetWidth = Math.floor(img.width * ratio);
+            const targetHeight = Math.floor(img.height * ratio);
+            const canvas = document.createElement('canvas');
+            canvas.width = targetWidth;
+            canvas.height = targetHeight;
+            const ctx = canvas.getContext('2d', { alpha: false });
+            ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+            const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+            localStorage.setItem('bgImage', optimizedDataUrl);
+            document.body.style.backgroundImage = `url(${optimizedDataUrl})`;
+          };
+          img.src = dataUrl;
+        } else {
+          localStorage.setItem('bgImage', dataUrl);
+          document.body.style.backgroundImage = `url(${dataUrl})`;
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+
+    bgClear.addEventListener('click', () => {
+      localStorage.removeItem('bgImage');
+      document.body.style.backgroundImage = 'none';
+      document.body.style.background = 'linear-gradient(135deg, #ff9a9e 0%, #fad0c4 100%)';
+    });
+  </script>
+</body>
+</html>
