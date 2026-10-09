@@ -1,1 +1,41 @@
+package com.coara.browser2.model;
 
+public class DownloadItem {
+    public long downloadId;
+    public String title;
+    public String description;
+    public int status;
+    public long downloadedSize;
+    public long totalSize;
+    public String localUri;
+    public String downloadUrl;
+    public boolean isPaused;
+    public boolean manual;
+    public String userAgent;
+    public String referer;
+    public boolean basicAuthEnabled;
+    public String filePath;
+    public String mimeType;
+
+    public DownloadItem(long downloadId, String title, String description, int status, long downloadedSize, long totalSize, String localUri, String downloadUrl) {
+        this.downloadId = downloadId;
+        this.title = title;
+        this.description = description;
+        this.status = status;
+        this.downloadedSize = downloadedSize;
+        this.totalSize = totalSize;
+        this.localUri = localUri;
+        this.downloadUrl = downloadUrl;
+        this.isPaused = false;
+        this.manual = false;
+        this.filePath = "";
+        this.mimeType = "";
+        this.userAgent = "";
+        this.referer = "";
+        this.basicAuthEnabled = false;
+    }
+
+    public int getProgress() {
+        return totalSize > 0 ? (int) ((downloadedSize * 100) / totalSize) : 0;
+    }
+}
