@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+  
+    <shortcut
+        android:shortcutId="qrcode_convert"
+        android:enabled="true"
+        android:icon="@drawable/ic_qrcode"
+        android:shortcutShortLabel="@string/qrcode_short_label"
+        android:shortcutLongLabel="@string/qrcode_long_label">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.coara.browser2"
+            android:targetClass="com.coara.browser2.QrCodeActivity" />
+    </shortcut>
+  
+    <shortcut
+        android:shortcutId="pagedl"
+        android:enabled="true"
+        android:icon="@drawable/ic_pagedl"
+        android:shortcutShortLabel="@string/pagedl_short_label"
+        android:shortcutLongLabel="@string/pagedl_long_label">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.coara.browser2"
+            android:targetClass="com.coara.browser2.pagedl" />
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="asciiart"
+        android:enabled="true"
+        android:icon="@drawable/ic_asciiart"
+        android:shortcutShortLabel="@string/asciiart_short_label"
+        android:shortcutLongLabel="@string/asciiart_long_label">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.coara.browser2"
+            android:targetClass="com.coara.browser2.asciiart" />
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="txtphoto"
+        android:enabled="true"
+        android:icon="@drawable/ic_txtphoto"
+        android:shortcutShortLabel="@string/txtphoto_short_label"
+        android:shortcutLongLabel="@string/txtphoto_long_label">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.coara.browser2"
+            android:targetClass="com.coara.browser2.txtphoto" />
+    </shortcut>
+
+</shortcuts>
