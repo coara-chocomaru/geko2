@@ -82,6 +82,7 @@ import com.coara.browser2.util.BrowserUrlRouter;
 import com.coara.browser2.util.BrowserAssetLoader;
 import com.coara.browser2.webview.TabOverviewDialog;
 import com.coara.browser2.util.TabStateStore;
+import com.coara.browser2.util.SafeBrowsingSupport;
 import com.coara.browser2.util.TabHistoryStore;
 import com.coara.browser2.util.SwipeRefreshPolicy;
 import com.coara.browser2.util.BrowserConstants;
@@ -231,6 +232,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private final Map<BrowserView, TabHistoryStore.State> tabHistoryStates = new HashMap<>();
     private final Set<BrowserView> backNavigationTabs = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
     private final Map<BrowserView, Integer> virtualBase = new WeakHashMap<>();
+    private final Set<BrowserView> popupTabs = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
     private final Map<BrowserView, Runnable> stateSaveTasks = new HashMap<>();
     private final ExecutorService persistExecutor = UiThread.newPool(1);
     private final Set<BrowserView> dirtyStateTabs = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
@@ -689,6 +691,15 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
     private void saveTabHistoryState(BrowserView view) {
         syncTabHistoryFromWebView(view);
+    }
+
+    private void navigateBackFromError(BrowserView view) {
+        if (view == null) {
+            return;
+        }
+        if (!goBackInCurrentTab(view)) {
+            view.loadUrl(START_PAGE);
+        }
     }
 
     private boolean goBackInCurrentTab(BrowserView view) {
@@ -1567,20 +1578,28 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 TouchpadController.onPageFinished(view);
                 KeyboardSettings.configureWebView(view, pref);
                 applyBrowserVisualSettings(view);
-                BrowserThemeManager.applyToWebView(view, MainActivity.this);
+                if (url.startsWith(BrowserConstants.APP_ASSET_BASE_URL)) {
+                    BrowserThemeManager.applyToWebView(view, MainActivity.this);
+                }
                 DesktopContentOptimizer.apply(view, deskuaEnabled);
                 dirtyStateTabs.add(view);
-                final String capturedUrl = url;
                 UiThread.postDelayed(() -> {
-                    try {
-                        String cur = view.getUrl();
-                        if (cur != null && cur.equals(capturedUrl)) {
-                            DesktopContentOptimizer.apply(view, deskuaEnabled);
-                            BrowserThemeManager.applyToWebView(view, MainActivity.this);
-                        }
-                    } catch (Exception ignored) {
+                    if (view == getCurrentWebView() && !view.isLoading()) {
+                        captureTabSnapshot(view);
                     }
-                }, 1500);
+                }, 1500L);
+                if (deskuaEnabled) {
+                    final String capturedUrl = url;
+                    UiThread.postDelayed(() -> {
+                        try {
+                            String cur = view.getUrl();
+                            if (cur != null && cur.equals(capturedUrl)) {
+                                DesktopContentOptimizer.apply(view, true);
+                            }
+                        } catch (Exception ignored) {
+                        }
+                    }, 1500);
+                }
                 if (url.equals(START_PAGE)) {
                     faviconImageView.setVisibility(View.GONE);
                     if (view == getCurrentWebView()) {
@@ -1608,6 +1627,17 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             public void onLoadFailed(BrowserView view, LoadFailure failure) {
                 if (swipeRefreshLayout.isRefreshing() && view == getCurrentWebView()) {
                     swipeRefreshLayout.setRefreshing(false);
+                }
+                if (view == getCurrentWebView() && SafeBrowsingSupport.handles(failure)) {
+                    UiThread.mainHandler().post(() -> SafeBrowsingSupport.show(MainActivity.this, view, failure,
+                            () -> navigateBackFromError(view)));
+                }
+            }
+
+            @Override
+            public void onErrorAction(BrowserView view, String action, String url) {
+                if ("back".equals(action)) {
+                    navigateBackFromError(view);
                 }
             }
 
@@ -1644,7 +1674,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             @Override
             public void onCloseWindow(BrowserView view) {
                 UiThread.mainHandler().post(() -> {
-                    if (webViews.contains(view) && webViews.size() > 1) {
+                    if (webViews.contains(view) && webViews.size() > 1 && popupTabs.contains(view)) {
                         closeTab(view);
                     }
                 });
@@ -1653,6 +1683,18 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             @Override
             public void onHistoryChanged(BrowserView view, NavHistory history) {
                 mergeHistoryFromEngine(view, history, false);
+            }
+
+            @Override
+            public void onReceivedTitle(BrowserView view, String title) {
+                if (title == null || title.isEmpty()) {
+                    return;
+                }
+                String current = view.getUrl();
+                if (current != null) {
+                    updateHistoryTitle(current, title);
+                }
+                dirtyStateTabs.add(view);
             }
 
             @Override
@@ -1779,6 +1821,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         child.setTag(nextTabId);
         nextTabId++;
         webViews.add(child);
+        popupTabs.add(child);
         tabHistoryStates.put(child, new TabHistoryStore.State());
         updateTabCount();
         switchToTab(webViews.size() - 1);
@@ -1976,20 +2019,26 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             if (tag != null) {
                 replacement.setTag(tag);
             }
+            TabHistoryStore.State carried = tabHistoryStates.remove(crashed);
+            if (carried != null) {
+                tabHistoryStates.put(replacement, carried);
+            }
+            backNavigationTabs.remove(crashed);
+            virtualBase.remove(crashed);
+            popupTabs.remove(crashed);
             webViews.set(index, replacement);
             if (wasExternal) {
                 externalTabs.add(replacement);
                 ExternalDownloadTabTracker.markExternal(replacement, recoverUrl);
             }
-
+            int recoveredId = tag instanceof Integer ? (Integer) tag : -1;
+            pendingTabs.put(replacement, new PendingTab(recoveredId, recoverUrl, "", false));
             if (wasCurrent) {
                 webViewContainer.addView(replacement);
-                replacement.loadUrl(recoverUrl);
+                ensureTabLoaded(replacement);
                 urlEditText.setText(recoverUrl);
                 updatePullToRefreshState(replacement, recoverUrl);
             } else {
-                
-                replacement.loadUrl(recoverUrl);
                 replacement.onPause();
             }
         }
@@ -3942,9 +3991,25 @@ private void showHistoryDialog() {
     
     private void showTabsDialog() {
         BrowserView currentForSnapshot = getCurrentWebView();
-        if (currentForSnapshot != null) {
-            captureTabSnapshot(currentForSnapshot);
+        if (currentForSnapshot == null || pendingTabs.containsKey(currentForSnapshot)) {
+            openTabsDialog();
+            return;
         }
+        final boolean[] opened = {false};
+        final Runnable open = () -> {
+            if (opened[0]) {
+                return;
+            }
+            opened[0] = true;
+            if (!isFinishing() && !isDestroyed()) {
+                openTabsDialog();
+            }
+        };
+        UiThread.mainHandler().postDelayed(open, 450L);
+        captureTabSnapshot(currentForSnapshot, open);
+    }
+
+    private void openTabsDialog() {
         TabOverviewDialog.show(
                 this,
                 new TabOverviewDialog.Host() {
@@ -4017,55 +4082,64 @@ private void showHistoryDialog() {
     }
 
 
+    private final Set<BrowserView> snapshotInFlight = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
+
     private void captureTabSnapshot(BrowserView webView) {
-        if (webView == null) return;
-        int width = webView.getWidth();
-        int height = webView.getHeight();
-        if (width <= 0 || height <= 0) return;
+        captureTabSnapshot(webView, null);
+    }
 
-        Object tag = webView.getTag();
-        int id = (tag instanceof Integer) ? (Integer) tag : -1;
-
-        Bitmap previous = tabSnapshots.remove(webView);
-        if (previous != null && !previous.isRecycled()) {
-            try {
-                previous.recycle();
-            } catch (Exception ignored) {
+    private void captureTabSnapshot(final BrowserView webView, final Runnable done) {
+        if (webView == null || webView.getWidth() <= 0 || webView.getHeight() <= 0
+                || pendingTabs.containsKey(webView) || isFinishing() || isDestroyed()
+                || !snapshotInFlight.add(webView)) {
+            if (done != null) {
+                done.run();
             }
-        }
-
-        
-        
-        
-        
-        
-        
-        
-        int maxPreviewWidth = 480;
-        float scale = width > maxPreviewWidth ? (float) maxPreviewWidth / (float) width : 1f;
-        int targetWidth = Math.max(1, Math.round(width * scale));
-        int targetHeight = Math.max(1, Math.round(height * scale));
-
-        Bitmap snapshot;
-        try {
-            snapshot = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.RGB_565);
-            Canvas canvas = new Canvas(snapshot);
-            if (scale != 1f) {
-                canvas.scale(scale, scale);
-            }
-            webView.draw(canvas);
-        } catch (OutOfMemoryError oom) {
-            
-            
-            snapshot = null;
-        }
-
-        if (snapshot == null) {
             return;
         }
-
-        tabSnapshots.put(webView, snapshot);
-        dirtySnapshotTabs.add(webView);
+        webView.capture(bitmap -> {
+            if (bitmap == null || bitmap.isRecycled()) {
+                snapshotInFlight.remove(webView);
+                if (done != null) {
+                    done.run();
+                }
+                return;
+            }
+            backgroundExecutor.execute(() -> {
+                Bitmap small = null;
+                try {
+                    int maxWidth = 360;
+                    int sw = bitmap.getWidth();
+                    int sh = bitmap.getHeight();
+                    float scale = sw > maxWidth ? (float) maxWidth / (float) sw : 1f;
+                    int tw = Math.max(1, Math.round(sw * scale));
+                    int th = Math.max(1, Math.round(sh * scale));
+                    small = Bitmap.createBitmap(tw, th, Bitmap.Config.RGB_565);
+                    Canvas canvas = new Canvas(small);
+                    canvas.drawColor(Color.WHITE);
+                    android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+                    canvas.drawBitmap(bitmap, null, new android.graphics.Rect(0, 0, tw, th), paint);
+                } catch (Throwable t) {
+                    small = null;
+                } finally {
+                    try {
+                        bitmap.recycle();
+                    } catch (Throwable ignored) {
+                    }
+                }
+                final Bitmap result = small;
+                runOnUiThread(() -> {
+                    snapshotInFlight.remove(webView);
+                    if (result != null && webViews.contains(webView)) {
+                        tabSnapshots.put(webView, result);
+                        dirtySnapshotTabs.add(webView);
+                    }
+                    if (done != null) {
+                        done.run();
+                    }
+                });
+            });
+        });
     }
 
 
@@ -4283,7 +4357,24 @@ private boolean shouldRecordHistory(String url) {
             || lower.startsWith("blob:") || lower.startsWith("chrome-error:")
             || lower.startsWith("file:///android_asset") || lower.startsWith("file:///android_res")
             || lower.startsWith("https://appassets.androidplatform.net/assets/")
-            || lower.startsWith("https://appassets.androidplatform.net/res/"));
+            || lower.startsWith("https://appassets.androidplatform.net/res/")
+            || lower.startsWith(BrowserConstants.APP_ASSET_BASE_URL)
+            || lower.startsWith("moz-extension:") || lower.startsWith("resource:")
+            || lower.startsWith(com.coara.browser2.gecko.ErrorPages.ACTION_SCHEME));
+}
+
+private void updateHistoryTitle(String url, String title) {
+    synchronized (historyItems) {
+        if (historyItems.isEmpty()) {
+            return;
+        }
+        int idx = historyItems.size() - 1;
+        HistoryItem last = historyItems.get(idx);
+        if (last.getUrl().equals(url) && (last.getTitle() == null || last.getTitle().isEmpty())) {
+            historyItems.set(idx, new HistoryItem(title, url, last.getTimestamp()));
+            scheduleHistorySave();
+        }
+    }
 }
 
 private void addHistory(String url, String title) {

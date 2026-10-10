@@ -72,6 +72,7 @@ import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.textfield.TextInputEditText;
+import com.coara.browser2.util.SafeBrowsingSupport;
 import com.coara.browser2.util.BasicAuthManager;
 import com.coara.browser2.util.ExternalDownloadTabTracker;
 import com.coara.browser2.util.DownloadSupport;
@@ -859,6 +860,17 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         setRequestedOrientation(fullScreenPreviousOrientation);
     }
 
+    private void navigateBackFromError(BrowserView view) {
+        if (view == null) {
+            return;
+        }
+        if (view.canGoBack()) {
+            view.goBack();
+        } else {
+            view.loadUrl(START_PAGE);
+        }
+    }
+
     private BrowserView createNewWebView() {
         final BrowserView webView = new BrowserView(this, true);
         KeyboardSettings.configureWebView(webView, pref);
@@ -894,6 +906,21 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         });
 
         webView.setClient(new BrowserClient() {
+            @Override
+            public void onLoadFailed(BrowserView view, LoadFailure failure) {
+                if (view == getCurrentWebView() && SafeBrowsingSupport.handles(failure)) {
+                    UiThread.mainHandler().post(() -> SafeBrowsingSupport.show(SecretActivity.this, view, failure,
+                            () -> navigateBackFromError(view)));
+                }
+            }
+
+            @Override
+            public void onErrorAction(BrowserView view, String action, String url) {
+                if ("back".equals(action)) {
+                    navigateBackFromError(view);
+                }
+            }
+
             @Override
             public boolean shouldOverrideUrlLoading(BrowserView view, String url, boolean mainFrame,
                                                     boolean hasGesture, boolean redirect) {
