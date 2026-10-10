@@ -87,7 +87,7 @@ public final class BrowserEngine {
                 .remoteDebuggingEnabled(false)
                 .consoleOutput(false)
                 .debugLogging(false)
-                .doubleTapZoomingEnabled(true)
+                .doubleTapZoomingEnabled(false)
                 .inputAutoZoomEnabled(false)
                 .forceUserScalableEnabled(false)
                 .webManifest(false)
@@ -226,6 +226,7 @@ public final class BrowserEngine {
         zoomEnabled = enabled;
         if (runtime != null) {
             runtime.getSettings().setForceUserScalableEnabled(enabled);
+            runtime.getSettings().setDoubleTapZoomingEnabled(enabled);
         }
     }
 

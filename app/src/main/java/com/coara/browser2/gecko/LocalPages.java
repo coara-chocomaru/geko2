@@ -57,6 +57,10 @@ public final class LocalPages {
         if (actualUrl == null) {
             return null;
         }
+        String failed = ErrorPages.failedUrlFor(actualUrl);
+        if (failed != null) {
+            return failed;
+        }
         String base = BrowserEngine.get().getExtensionBaseUrl();
         if (base != null) {
             String prefix = base + BrowserEngine.PAGES_DIR;

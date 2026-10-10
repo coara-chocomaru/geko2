@@ -245,6 +245,66 @@ public class BrowserView extends GeckoView {
         }, 25L);
     }
 
+    private final java.util.Set<String> certProceed = new java.util.HashSet<>();
+
+    private static String hostOf(String u) {
+        try {
+            String h = android.net.Uri.parse(u).getHost();
+            return h == null ? null : h.toLowerCase(java.util.Locale.US);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    public void proceedAfterCertificateError(String target) {
+        if (target == null || target.isEmpty()) {
+            return;
+        }
+        String host = hostOf(target);
+        if (host != null) {
+            certProceed.add(host);
+        }
+        loadUrl(target);
+    }
+
+    public void loadUrlBypassClassifier(String target) {
+        if (target == null || target.isEmpty()) {
+            return;
+        }
+        ensureSession();
+        if (session == null) {
+            return;
+        }
+        dataLogicalUrl = null;
+        url = target;
+        session.load(new GeckoSession.Loader().uri(target).flags(GeckoSession.LOAD_FLAGS_BYPASS_CLASSIFIER));
+    }
+
+    private void handleErrorAction(String actionUri) {
+        if (destroyed) {
+            return;
+        }
+        String action = ErrorPages.actionOf(actionUri);
+        String target = ErrorPages.paramOf(actionUri, "u");
+        if (target == null || target.isEmpty()) {
+            target = getUrl();
+        }
+        if ("reload".equals(action)) {
+            loadUrl(target);
+        } else if ("proceed".equals(action)) {
+            if (ErrorPages.KIND_SAFE.equals(ErrorPages.paramOf(actionUri, "k"))) {
+                loadUrlBypassClassifier(target);
+            } else {
+                proceedAfterCertificateError(target);
+            }
+        } else {
+            BrowserClient c = client;
+            if (c != null) {
+                c.onErrorAction(this, action, target);
+            }
+        }
+    }
+
     public void loadUrlReplacingHistory(String target) {
         if (target == null || target.isEmpty()) {
             return;
@@ -735,7 +795,15 @@ public class BrowserView extends GeckoView {
                 l.onBridgeCall(this, m.optString("fn"), m.optJSONArray("a"));
             }
         } else if ("icon".equals(t) && top) {
-            fetchIcon(m.optJSONArray("hrefs"));
+            JSONArray arr = m.optJSONArray("hrefs");
+            if (arr == null) {
+                String single = m.optString("href", "");
+                arr = new JSONArray();
+                if (!single.isEmpty()) {
+                    arr.put(single);
+                }
+            }
+            fetchIcon(arr);
         }
     }
 
@@ -778,10 +846,38 @@ public class BrowserView extends GeckoView {
         });
     }
 
+    private boolean iconDelivered;
+
+    private void scheduleIconFallback() {
+        final String page = getUrl();
+        if (page == null || !(page.startsWith("http://") || page.startsWith("https://"))) {
+            return;
+        }
+        main.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (destroyed || iconDelivered || !page.equals(getUrl())) {
+                    return;
+                }
+                try {
+                    android.net.Uri u = android.net.Uri.parse(page);
+                    if (u.getHost() == null) {
+                        return;
+                    }
+                    JSONArray a = new JSONArray();
+                    a.put(u.getScheme() + "://" + u.getAuthority() + "/favicon.ico");
+                    fetchIcon(a);
+                } catch (Throwable ignored) {
+                }
+            }
+        }, 1800L);
+    }
+
     private void deliverIcon(final Bitmap bmp) {
         main.post(new Runnable() {
             @Override
             public void run() {
+                iconDelivered = true;
                 BrowserClient c = client;
                 if (!destroyed && c != null) {
                     c.onReceivedIcon(BrowserView.this, bmp);
@@ -882,6 +978,16 @@ public class BrowserView extends GeckoView {
         @Override
         public GeckoResult<AllowOrDeny> onLoadRequest(GeckoSession s, LoadRequest request) {
             String uri = request.uri;
+            if (ErrorPages.isAction(uri)) {
+                final String actionUri = uri;
+                main.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        handleErrorAction(actionUri);
+                    }
+                });
+                return GeckoResult.fromValue(AllowOrDeny.DENY);
+            }
             if (LocalPages.isLogical(uri)) {
                 final String target = uri;
                 main.post(new Runnable() {
@@ -942,11 +1048,27 @@ public class BrowserView extends GeckoView {
 
         @Override
         public GeckoResult<String> onLoadError(GeckoSession s, String uri, WebRequestError error) {
-            BrowserClient c = client;
-            if (c != null && error != null) {
-                c.onLoadFailed(BrowserView.this, new BrowserClient.LoadFailure(uri, error.category, error.code));
+            String failed = LocalPages.toLogical(uri);
+            if (error == null) {
+                return GeckoResult.fromValue(ErrorPages.build(failed, null, false));
             }
-            return null;
+            String detail = null;
+            if (error.category == WebRequestError.ERROR_CATEGORY_SECURITY) {
+                String host = null;
+                try {
+                    host = android.net.Uri.parse(failed).getHost();
+                } catch (Throwable ignored) {
+                }
+                detail = ErrorPages.describeCertificate(error.certificate, host);
+            }
+            loading = false;
+            BrowserClient c = client;
+            if (c != null) {
+                c.onLoadFailed(BrowserView.this, new BrowserClient.LoadFailure(failed, error.category, error.code, detail));
+            }
+            String failedHost = hostOf(failed);
+            boolean auto = ErrorPages.isSecurityOverridable(error) && failedHost != null && certProceed.remove(failedHost);
+            return GeckoResult.fromValue(ErrorPages.build(failed, error, auto));
         }
     };
 
@@ -959,6 +1081,7 @@ public class BrowserView extends GeckoView {
             if (uri != null) {
                 url = uri;
             }
+            iconDelivered = false;
             failPendingEvals();
             topPort = null;
             framePorts.clear();
@@ -975,6 +1098,9 @@ public class BrowserView extends GeckoView {
             BrowserClient c = client;
             if (c != null) {
                 c.onPageFinished(BrowserView.this, getUrl());
+            }
+            if (success) {
+                scheduleIconFallback();
             }
         }
 

@@ -36,11 +36,17 @@ public interface BrowserClient {
         public final String url;
         public final int category;
         public final int code;
+        public final String detail;
 
         public LoadFailure(String url, int category, int code) {
+            this(url, category, code, null);
+        }
+
+        public LoadFailure(String url, int category, int code, String detail) {
             this.url = url;
             this.category = category;
             this.code = code;
+            this.detail = detail;
         }
     }
 
@@ -96,6 +102,9 @@ public interface BrowserClient {
     }
 
     default void onHistoryChanged(BrowserView view, NavHistory history) {
+    }
+
+    default void onErrorAction(BrowserView view, String action, String url) {
     }
 
     default void onSessionStateChanged(BrowserView view) {
