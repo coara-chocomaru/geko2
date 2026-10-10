@@ -1,9 +1,12 @@
 package com.coara.browser2.gecko;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.res.AssetManager;
 import android.os.Handler;
 import android.os.Looper;
+
+import com.coara.browser2.util.BrowserConstants;
 
 import org.json.JSONObject;
 import org.mozilla.geckoview.AllowOrDeny;
@@ -69,6 +72,8 @@ public final class BrowserEngine {
     }
 
     private void start() {
+        SharedPreferences prefs = appContext.getSharedPreferences(BrowserConstants.PREF_NAME, Context.MODE_PRIVATE);
+        darkMode = prefs.getBoolean(BrowserConstants.KEY_DARK_MODE, false);
         ContentBlocking.Settings blocking = new ContentBlocking.Settings.Builder()
                 .antiTracking(ContentBlocking.AntiTracking.DEFAULT)
                 .safeBrowsing(ContentBlocking.SafeBrowsing.DEFAULT)
@@ -86,9 +91,16 @@ public final class BrowserEngine {
                 .inputAutoZoomEnabled(false)
                 .forceUserScalableEnabled(false)
                 .webManifest(false)
-                .preferredColorScheme(GeckoRuntimeSettings.COLOR_SCHEME_LIGHT)
+                .preferredColorScheme(darkMode
+                        ? GeckoRuntimeSettings.COLOR_SCHEME_DARK
+                        : GeckoRuntimeSettings.COLOR_SCHEME_LIGHT)
+                .fissionEnabled(false)
+                .loginAutofillEnabled(false)
+                .translationsOfferPopup(false)
+                .crashPullNeverShowAgain(true)
                 .build();
         runtime = GeckoRuntime.create(appContext, settings);
+        applyColorSchemePrefs(darkMode);
         executor = new GeckoWebExecutor(runtime);
         defaultUserAgent = GeckoSession.getDefaultUserAgent();
         installCore();
@@ -176,12 +188,23 @@ public final class BrowserEngine {
         return defaultUserAgent == null ? "" : defaultUserAgent;
     }
 
+    private void applyColorSchemePrefs(boolean dark) {
+        try {
+            GeckoPreferenceController.setGeckoPref("layout.css.prefers-color-scheme.content-override",
+                    dark ? 0 : 1, GeckoPreferenceController.PREF_BRANCH_USER);
+            GeckoPreferenceController.setGeckoPref("ui.systemUsesDarkTheme",
+                    dark ? 1 : 0, GeckoPreferenceController.PREF_BRANCH_USER);
+        } catch (Throwable ignored) {
+        }
+    }
+
     public void setDarkMode(boolean enabled) {
         darkMode = enabled;
         if (runtime != null) {
             runtime.getSettings().setPreferredColorScheme(enabled
                     ? GeckoRuntimeSettings.COLOR_SCHEME_DARK
                     : GeckoRuntimeSettings.COLOR_SCHEME_LIGHT);
+            applyColorSchemePrefs(enabled);
         }
         agent.broadcastDarkMode(enabled);
     }

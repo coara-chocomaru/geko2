@@ -98,6 +98,9 @@ public interface BrowserClient {
     default void onHistoryChanged(BrowserView view, NavHistory history) {
     }
 
+    default void onSessionStateChanged(BrowserView view) {
+    }
+
     default void onSecurityChanged(BrowserView view, boolean secure) {
     }
 }

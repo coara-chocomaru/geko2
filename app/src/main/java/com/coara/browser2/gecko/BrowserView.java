@@ -50,6 +50,7 @@ public class BrowserView extends GeckoView {
     private static final int CHAR_MODE_NUMBER = 1;
     private static final int CHAR_MODE_ENGLISH = 2;
     private static final String STATE_KEY = "gecko_state";
+    private static final String STATE_URL_KEY = "gecko_state_url";
     private static final int MAX_PENDING_EVALS = 32;
     private static final long EVAL_TIMEOUT_MS = 10000L;
 
@@ -98,9 +99,9 @@ public class BrowserView extends GeckoView {
     private int clearColor = 0xFFFFFFFF;
     private int evalSeq;
     private GeckoSession.SessionState sessionState;
+    private String sessionStateUrl;
     private NavHistory history = NavHistory.empty();
-    private String lastIconHref = "";
-    private String pendingUrl;
+        private String pendingUrl;
     private Map<String, String> pendingHeaders;
     private Object extraTag;
 
@@ -242,6 +243,27 @@ public class BrowserView extends GeckoView {
                 }
             }
         }, 25L);
+    }
+
+    public void loadUrlReplacingHistory(String target) {
+        if (target == null || target.isEmpty()) {
+            return;
+        }
+        ensureSession();
+        if (session == null) {
+            return;
+        }
+        if (LocalPages.isLogical(target) || target.regionMatches(true, 0, "javascript:", 0, 11)) {
+            loadUrl(target);
+            return;
+        }
+        dataLogicalUrl = null;
+        url = target;
+        session.load(new GeckoSession.Loader().uri(target).flags(GeckoSession.LOAD_FLAGS_REPLACE_HISTORY));
+    }
+
+    public static String savedStateUrl(Bundle in) {
+        return in == null ? null : in.getString(STATE_URL_KEY);
     }
 
     public void loadUrl(String target) {
@@ -423,6 +445,9 @@ public class BrowserView extends GeckoView {
         }
         if (sessionState != null) {
             out.putString(STATE_KEY, sessionState.toString());
+            if (sessionStateUrl != null) {
+                out.putString(STATE_URL_KEY, sessionStateUrl);
+            }
         }
     }
 
@@ -448,6 +473,7 @@ public class BrowserView extends GeckoView {
             return false;
         }
         sessionState = parsed;
+        sessionStateUrl = in.getString(STATE_URL_KEY);
         session.restoreState(parsed);
         return true;
     }
@@ -455,6 +481,7 @@ public class BrowserView extends GeckoView {
     public void onPause() {
         paused = true;
         if (session != null) {
+            session.setPriorityHint(GeckoSession.PRIORITY_DEFAULT);
             session.setActive(false);
         }
     }
@@ -463,6 +490,7 @@ public class BrowserView extends GeckoView {
         paused = false;
         if (session != null) {
             session.setActive(true);
+            session.setPriorityHint(GeckoSession.PRIORITY_HIGH);
         }
     }
 
@@ -671,11 +699,9 @@ public class BrowserView extends GeckoView {
             } catch (Throwable ignored) {
             }
         }
-        if (BrowserEngine.get().isDarkMode()) {
-            try {
-                port.postMessage(PageAgent.json("t", "dark", "on", true));
-            } catch (Throwable ignored) {
-            }
+        try {
+            port.postMessage(PageAgent.json("t", "dark", "on", BrowserEngine.get().isDarkMode()));
+        } catch (Throwable ignored) {
         }
         if (top && !pendingEvals.isEmpty()) {
             List<PendingEval> copy = new ArrayList<>(pendingEvals);
@@ -709,48 +735,109 @@ public class BrowserView extends GeckoView {
                 l.onBridgeCall(this, m.optString("fn"), m.optJSONArray("a"));
             }
         } else if ("icon".equals(t) && top) {
-            fetchIcon(m.optString("href"));
+            fetchIcon(m.optJSONArray("hrefs"));
         }
     }
 
-    private void fetchIcon(final String href) {
-        if (href == null || href.isEmpty() || href.equals(lastIconHref)) {
+    private static final android.util.LruCache<String, Bitmap> ICON_CACHE = new android.util.LruCache<String, Bitmap>(24);
+
+    private void fetchIcon(final JSONArray hrefs) {
+        if (hrefs == null || hrefs.length() == 0) {
             return;
         }
-        lastIconHref = href;
+        final List<String> list = new ArrayList<>();
+        for (int i = 0; i < hrefs.length(); i++) {
+            String h = hrefs.optString(i, "");
+            if (!h.isEmpty()) {
+                list.add(h);
+            }
+        }
+        if (list.isEmpty()) {
+            return;
+        }
+        for (String h : list) {
+            Bitmap cached = ICON_CACHE.get(h);
+            if (cached != null && !cached.isRecycled()) {
+                deliverIcon(cached);
+                return;
+            }
+        }
+        final String ua = settings.getUserAgentString();
         UiThread.io().execute(new Runnable() {
             @Override
             public void run() {
-                HttpURLConnection c = null;
-                try {
-                    c = (HttpURLConnection) new URL(href).openConnection();
-                    c.setConnectTimeout(5000);
-                    c.setReadTimeout(5000);
-                    c.setRequestProperty("User-Agent", settings.getUserAgentString());
-                    if (c.getResponseCode() != 200) {
+                for (String h : list) {
+                    Bitmap bmp = loadIcon(h, ua);
+                    if (bmp != null) {
+                        ICON_CACHE.put(h, bmp);
+                        deliverIcon(bmp);
                         return;
-                    }
-                    try (InputStream in = c.getInputStream()) {
-                        final Bitmap bmp = BitmapFactory.decodeStream(in);
-                        if (bmp != null) {
-                            main.post(new Runnable() {
-                                @Override
-                                public void run() {
-                                    if (!destroyed && client != null) {
-                                        client.onReceivedIcon(BrowserView.this, bmp);
-                                    }
-                                }
-                            });
-                        }
-                    }
-                } catch (Throwable ignored) {
-                } finally {
-                    if (c != null) {
-                        c.disconnect();
                     }
                 }
             }
         });
+    }
+
+    private void deliverIcon(final Bitmap bmp) {
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                BrowserClient c = client;
+                if (!destroyed && c != null) {
+                    c.onReceivedIcon(BrowserView.this, bmp);
+                }
+            }
+        });
+    }
+
+    private static Bitmap loadIcon(String href, String ua) {
+        try {
+            if (href.startsWith("data:")) {
+                int comma = href.indexOf(',');
+                if (comma < 0) {
+                    return null;
+                }
+                String meta = href.substring(0, comma);
+                String body = href.substring(comma + 1);
+                byte[] bytes = meta.contains(";base64")
+                        ? android.util.Base64.decode(body, android.util.Base64.DEFAULT)
+                        : java.net.URLDecoder.decode(body, "UTF-8").getBytes("UTF-8");
+                return BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+            }
+            HttpURLConnection c = null;
+            try {
+                c = (HttpURLConnection) new URL(href).openConnection();
+                c.setConnectTimeout(4000);
+                c.setReadTimeout(4000);
+                c.setInstanceFollowRedirects(true);
+                c.setRequestProperty("User-Agent", ua);
+                c.setRequestProperty("Accept", "image/*,*/*;q=0.5");
+                if (c.getResponseCode() != 200) {
+                    return null;
+                }
+                try (InputStream in = new java.io.BufferedInputStream(c.getInputStream(), 8192)) {
+                    java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                    byte[] buf = new byte[4096];
+                    int n;
+                    int total = 0;
+                    while ((n = in.read(buf)) > 0) {
+                        total += n;
+                        if (total > 512 * 1024) {
+                            return null;
+                        }
+                        out.write(buf, 0, n);
+                    }
+                    byte[] data = out.toByteArray();
+                    return BitmapFactory.decodeByteArray(data, 0, data.length);
+                }
+            } finally {
+                if (c != null) {
+                    c.disconnect();
+                }
+            }
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     private void failPendingEvals() {
@@ -912,6 +999,12 @@ public class BrowserView extends GeckoView {
         @Override
         public void onSessionStateChange(GeckoSession s, GeckoSession.SessionState state) {
             sessionState = state;
+            String now = getUrl();
+            sessionStateUrl = now == null || now.isEmpty() ? null : now;
+            BrowserClient c = client;
+            if (c != null) {
+                c.onSessionStateChanged(BrowserView.this);
+            }
         }
     };
 
