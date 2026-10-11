@@ -230,6 +230,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     
     private final Map<BrowserView, Boolean> pullToRefreshEligibleCache = new HashMap<>();
     private final Map<BrowserView, PendingTab> pendingTabs = new HashMap<>();
+    private final Set<BrowserView> reconcileTabs = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
     private final Set<BrowserView> staleTabs = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
     private final Map<BrowserView, TabHistoryStore.State> tabHistoryStates = new HashMap<>();
     private final Set<BrowserView> backNavigationTabs = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
@@ -628,20 +629,11 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             return;
         }
         final int id = getTabId(view);
-        if (id < 0) {
+        if (id < 0 || TabHistoryStore.isDead(id)) {
             return;
         }
-        TabHistoryStore.State prev = getTabHistoryState(view);
-        ArrayList<TabHistoryStore.Entry> entries = new ArrayList<>();
-        int base = virtualCount(view);
-        if (prev != null && base > 0) {
-            List<TabHistoryStore.Entry> pe = prev.getEntries();
-            for (int i = 0; i < base && i < pe.size(); i++) {
-                entries.add(pe.get(i));
-            }
-        }
-        int realBase = entries.size();
-        int cur = -1;
+        ArrayList<TabHistoryStore.Entry> geckoEntries = new ArrayList<>();
+        int geckoCur = -1;
         for (int i = 0; i < h.getSize(); i++) {
             NavHistory.Item item = h.getItemAtIndex(i);
             if (item == null) {
@@ -651,17 +643,42 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             if (u.isEmpty() || u.equals("about:blank")) {
                 continue;
             }
-            entries.add(new TabHistoryStore.Entry(u, item.getTitle()));
+            geckoEntries.add(new TabHistoryStore.Entry(u, item.getTitle()));
             if (i == h.getCurrentIndex()) {
-                cur = entries.size() - 1;
+                geckoCur = geckoEntries.size() - 1;
             }
         }
-        if (entries.size() == realBase) {
+        if (geckoEntries.isEmpty()) {
             return;
         }
-        if (cur < 0) {
-            cur = entries.size() - 1;
+        if (geckoCur < 0) {
+            geckoCur = geckoEntries.size() - 1;
         }
+        TabHistoryStore.State prev = getTabHistoryState(view);
+        if (reconcileTabs.remove(view) && prev != null && !prev.isEmpty()) {
+            int storedIdx = Math.max(0, prev.getCurrentIndex());
+            TabHistoryStore.Entry storedCur = prev.getCurrent();
+            int base;
+            if (storedCur != null && storedCur.getUrl().equals(geckoEntries.get(geckoCur).getUrl())) {
+                base = Math.max(0, storedIdx - geckoCur);
+            } else if (geckoEntries.size() >= prev.size()) {
+                base = 0;
+            } else {
+                base = storedIdx;
+            }
+            virtualBase.put(view, Math.min(base, prev.size()));
+        }
+        ArrayList<TabHistoryStore.Entry> entries = new ArrayList<>();
+        int base = virtualCount(view);
+        if (prev != null && base > 0) {
+            List<TabHistoryStore.Entry> pe = prev.getEntries();
+            for (int i = 0; i < base && i < pe.size(); i++) {
+                entries.add(pe.get(i));
+            }
+        }
+        int realBase = entries.size();
+        entries.addAll(geckoEntries);
+        int cur = realBase + geckoCur;
         TabHistoryStore.State next = new TabHistoryStore.State();
         next.replace(entries, cur, MAX_TAB_HISTORY_SIZE);
         int start = Math.max(0, entries.size() - Math.max(1, MAX_TAB_HISTORY_SIZE));
@@ -707,7 +724,8 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         if (view == null) {
             return false;
         }
-        if (view.canGoBack()) {
+        NavHistory engineHistory = view.copyBackForwardList();
+        if (view.canGoBack() || (engineHistory != null && engineHistory.getCurrentIndex() > 0)) {
             backNavigationTabs.add(view);
             view.goBack();
             return true;
@@ -987,7 +1005,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             }
         }
         if (sessionRestored) {
-            virtualBase.remove(webView);
+            int storedIdx = historyState.isEmpty() ? 0 : Math.max(0, historyState.getCurrentIndex());
+            virtualBase.put(webView, storedIdx);
+            reconcileTabs.add(webView);
             final BrowserView guarded = webView;
             UiThread.mainHandler().postDelayed(() -> {
                 if (!webViews.contains(guarded) || pendingTabs.containsKey(guarded) || target == null || target.isEmpty()) {
