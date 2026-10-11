@@ -180,12 +180,12 @@ public final class PluginRuntime {
 
         @Override
         public void onPluginAutoDisabled(PluginInfo info, String reason) {
-            scheduleRepush();
+            repushNow();
         }
 
         @Override
         public void onPluginRuntimeChanged() {
-            scheduleRepush();
+            repushNow();
         }
     };
 
@@ -231,6 +231,11 @@ public final class PluginRuntime {
         MAIN.removeCallbacks(REPUSH);
         pushRegistrations(true);
         BrowserEngine.get().getAgent().afterPluginsApplied(afterApplied, 2500L);
+    }
+
+    private static void repushNow() {
+        MAIN.removeCallbacks(REPUSH);
+        MAIN.post(REPUSH);
     }
 
     private static void scheduleRepush() {
