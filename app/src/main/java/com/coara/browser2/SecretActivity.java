@@ -1747,57 +1747,9 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         }
     }
 
-    private void takeScreenshot() {
-    View rootView = getWindow().getDecorView().getRootView();
-    int width = rootView.getWidth();
-    int height = rootView.getHeight();
-    if (width <= 0 || height <= 0) {
-        Toast.makeText(SecretActivity.this, "スクリーンショット取得エラー: ビューサイズが無効", Toast.LENGTH_SHORT).show();
-        return;
+        private void takeScreenshot() {
+        com.coara.browser2.util.ScreenshotSaver.capture(this, getCurrentWebView(), backgroundExecutor);
     }
-
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        Handler handler = UiThread.mainHandler();
-        PixelCopy.request(getWindow(), bitmap, copyResult -> {
-            if (copyResult == PixelCopy.SUCCESS) {
-                saveScreenshot(bitmap);
-            } else {
-                Toast.makeText(SecretActivity.this, "スクリーンショットの取得に失敗しました", Toast.LENGTH_SHORT).show();
-            }
-        }, handler);
-    } else {
-        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(bitmap);
-        rootView.draw(canvas);
-        saveScreenshot(bitmap);
-    }
-}
-
-private void saveScreenshot(Bitmap bitmap) {
-    backgroundExecutor.execute(() -> {
-        try {
-            File screenshotDir = new File(Environment.getExternalStorageDirectory(), "DCIM/Screenshot");
-            if (!screenshotDir.exists()) {
-                screenshotDir.mkdirs();
-            }
-            String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date());
-            String fileName = timeStamp + ".png";
-            File screenshotFile = new File(screenshotDir, fileName);
-            try (FileOutputStream fos = new FileOutputStream(screenshotFile)) {
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, fos);
-                fos.flush();
-            }
-            runOnUiThread(() ->
-                Toast.makeText(SecretActivity.this, "スクリーンショットを保存しました: " + screenshotFile.getAbsolutePath(), Toast.LENGTH_LONG).show()
-            );
-        } catch (Exception e) {
-            runOnUiThread(() ->
-                Toast.makeText(SecretActivity.this, "スクリーンショット保存中にエラー: " + e.getMessage(), Toast.LENGTH_LONG).show()
-            );
-        }
-    });
-}
 
     private void updateDarkMode() {
         BrowserEngine.get().setDarkMode(darkModeEnabled);

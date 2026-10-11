@@ -914,7 +914,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     protected void onPause() {
         TouchpadOverlayController.onHostPause(this);
         PluginRuntime.onHostPause(this);
-        captureSnapshotIfDirty();
         pauseCurrentWebView();
         pauseAllWebViewTimers();
         flushHistory();
@@ -1626,6 +1625,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     BrowserThemeManager.applyToWebView(view, MainActivity.this);
                 }
                 dirtyStateTabs.add(view);
+                scheduleSnapshot(view, 1200L);
                 if (url.equals(START_PAGE)) {
                     faviconImageView.setVisibility(View.GONE);
                     if (view == getCurrentWebView()) {
@@ -1727,6 +1727,13 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             @Override
             public void onSessionStateChanged(BrowserView view) {
                 scheduleTabStateSave(view);
+            }
+
+            @Override
+            public void onScrollChanged(BrowserView view, int x, int y) {
+                if (view == getCurrentWebView()) {
+                    scheduleSnapshot(view, 1800L);
+                }
             }
 
             @Override
@@ -3686,57 +3693,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     }
 
 
-    private void takeScreenshot() {
-    View rootView = getWindow().getDecorView().getRootView();
-    int width = rootView.getWidth();
-    int height = rootView.getHeight();
-    if (width <= 0 || height <= 0) {
-        Toast.makeText(MainActivity.this, "スクリーンショット取得エラー: ビューサイズが無効", Toast.LENGTH_SHORT).show();
-        return;
+        private void takeScreenshot() {
+        com.coara.browser2.util.ScreenshotSaver.capture(this, getCurrentWebView(), backgroundExecutor);
     }
-
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        Handler handler = UiThread.mainHandler();
-        PixelCopy.request(getWindow(), bitmap, copyResult -> {
-            if (copyResult == PixelCopy.SUCCESS) {
-                saveScreenshot(bitmap);
-            } else {
-                Toast.makeText(MainActivity.this, "スクリーンショットの取得に失敗しました", Toast.LENGTH_SHORT).show();
-            }
-        }, handler);
-    } else {
-        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(bitmap);
-        rootView.draw(canvas);
-        saveScreenshot(bitmap);
-    }
-}
-
-private void saveScreenshot(Bitmap bitmap) {
-    backgroundExecutor.execute(() -> {
-        try {
-            File screenshotDir = new File(Environment.getExternalStorageDirectory(), "DCIM/Screenshot");
-            if (!screenshotDir.exists()) {
-                screenshotDir.mkdirs();
-            }
-            String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date());
-            String fileName = timeStamp + ".png";
-            File screenshotFile = new File(screenshotDir, fileName);
-            try (FileOutputStream fos = new FileOutputStream(screenshotFile)) {
-                bitmap.compress(Bitmap.CompressFormat.PNG, 80, fos); 
-                fos.flush();
-            }
-            runOnUiThread(() ->
-                Toast.makeText(MainActivity.this, "スクリーンショットを保存しました: " + screenshotFile.getAbsolutePath(), Toast.LENGTH_LONG).show()
-            );
-        } catch (Exception e) {
-            runOnUiThread(() ->
-                Toast.makeText(MainActivity.this, "スクリーンショット保存中にエラー: " + e.getMessage(), Toast.LENGTH_LONG).show()
-            );
-        }
-    });
-}
 
     private void updateDarkMode() {
         BrowserEngine.get().setDarkMode(darkModeEnabled);
@@ -4047,12 +4006,14 @@ private void showHistoryDialog() {
     private void captureTabSnapshot(final BrowserView webView, final Runnable done) {
         if (webView == null || webView.getWidth() <= 0 || webView.getHeight() <= 0
                 || pendingTabs.containsKey(webView) || isFinishing() || isDestroyed()
-                || !snapshotInFlight.add(webView)) {
+                || !webView.isCaptureReady() || !snapshotInFlight.add(webView)) {
             if (done != null) {
                 done.run();
             }
             return;
         }
+        final Runnable release = () -> snapshotInFlight.remove(webView);
+        UiThread.mainHandler().postDelayed(release, 4000L);
         webView.capture(bitmap -> {
             if (bitmap == null || bitmap.isRecycled()) {
                 snapshotInFlight.remove(webView);
@@ -4064,7 +4025,7 @@ private void showHistoryDialog() {
             backgroundExecutor.execute(() -> {
                 Bitmap small = null;
                 try {
-                    int maxWidth = 360;
+                    int maxWidth = 300;
                     int sw = bitmap.getWidth();
                     int sh = bitmap.getHeight();
                     float scale = sw > maxWidth ? (float) maxWidth / (float) sw : 1f;
@@ -4075,6 +4036,10 @@ private void showHistoryDialog() {
                     canvas.drawColor(Color.WHITE);
                     android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
                     canvas.drawBitmap(bitmap, null, new android.graphics.Rect(0, 0, tw, th), paint);
+                    if (isBlackFrame(small)) {
+                        small.recycle();
+                        small = null;
+                    }
                 } catch (Throwable t) {
                     small = null;
                 } finally {
@@ -4085,10 +4050,16 @@ private void showHistoryDialog() {
                 }
                 final Bitmap result = small;
                 runOnUiThread(() -> {
+                    UiThread.mainHandler().removeCallbacks(release);
                     snapshotInFlight.remove(webView);
                     if (result != null && webViews.contains(webView)) {
-                        tabSnapshots.put(webView, result);
+                        Bitmap old = tabSnapshots.put(webView, result);
+                        if (old != null && old != result && !old.isRecycled()) {
+                            old.recycle();
+                        }
                         dirtySnapshotTabs.add(webView);
+                    } else if (result != null && !result.isRecycled()) {
+                        result.recycle();
                     }
                     if (done != null) {
                         done.run();
@@ -4098,6 +4069,48 @@ private void showHistoryDialog() {
         });
     }
 
+    private static boolean isBlackFrame(Bitmap bitmap) {
+        int w = bitmap.getWidth();
+        int h = bitmap.getHeight();
+        if (w <= 0 || h <= 0) {
+            return true;
+        }
+        int steps = 12;
+        for (int yi = 0; yi < steps; yi++) {
+            for (int xi = 0; xi < steps; xi++) {
+                int x = Math.min(w - 1, (int) ((xi + 0.5f) * w / steps));
+                int y = Math.min(h - 1, (int) ((yi + 0.5f) * h / steps));
+                int c = bitmap.getPixel(x, y);
+                if (((c >> 16) & 0xFF) > 6 || ((c >> 8) & 0xFF) > 6 || (c & 0xFF) > 6) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private final Map<BrowserView, Runnable> snapshotTasks = new WeakHashMap<>();
+
+    private void scheduleSnapshot(final BrowserView view, long delayMs) {
+        if (view == null) {
+            return;
+        }
+        Runnable old = snapshotTasks.remove(view);
+        if (old != null) {
+            UiThread.mainHandler().removeCallbacks(old);
+        }
+        Runnable task = new Runnable() {
+            @Override
+            public void run() {
+                snapshotTasks.remove(view);
+                if (view == getCurrentWebView() && !view.isLoading() && hasWindowFocus()) {
+                    captureTabSnapshot(view);
+                }
+            }
+        };
+        snapshotTasks.put(view, task);
+        UiThread.mainHandler().postDelayed(task, delayMs);
+    }
 
     private void showBookmarksManagementDialog() {
         if (bookmarks.isEmpty()) {
