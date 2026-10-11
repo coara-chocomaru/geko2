@@ -23,8 +23,7 @@
       "matches": ["<all_urls>"],
       "js": ["content.js"],
       "run_at": "document_start",
-      "all_frames": true,
-      "match_about_blank": true
+      "all_frames": false
     }
   ],
   "content_security_policy": "script-src 'self' 'unsafe-eval'; object-src 'self'",

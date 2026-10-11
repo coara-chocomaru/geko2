@@ -209,24 +209,50 @@
             return;
         }
         try {
-            var best = "";
-            var nodes = document.querySelectorAll("link[rel~='icon'],link[rel='shortcut icon'],link[rel~='apple-touch-icon']");
+            var nodes = document.querySelectorAll("link[rel~='icon'],link[rel='shortcut icon'],link[rel~='apple-touch-icon'],link[rel~='apple-touch-icon-precomposed']");
+            var primary = [];
+            var touch = [];
             for (var i = 0; i < nodes.length; i++) {
                 var href = nodes[i].href;
-                if (href) {
-                    best = href;
-                    if (/icon/i.test(nodes[i].getAttribute("rel") || "") && !/apple/i.test(nodes[i].getAttribute("rel") || "")) {
-                        break;
-                    }
+                if (!href || !/^(https?:|data:image\/)/i.test(href)) {
+                    continue;
+                }
+                var rel = (nodes[i].getAttribute("rel") || "").toLowerCase();
+                if (rel.indexOf("apple") >= 0) {
+                    touch.push(href);
+                } else {
+                    primary.push(href);
                 }
             }
-            if (!best) {
-                best = location.origin + "/favicon.ico";
+            var list = primary.concat(touch);
+            if (location.origin && /^https?:/i.test(location.origin)) {
+                list.push(location.origin + "/favicon.ico");
             }
-            if (best !== iconSent && /^https?:/i.test(best)) {
-                iconSent = best;
-                send({ t: "icon", href: best });
+            var key = list.join("|");
+            if (list.length && key !== iconSent) {
+                iconSent = key;
+                send({ t: "icon", hrefs: list.slice(0, 6) });
             }
+        } catch (e) {
+        }
+    }
+
+    var iconTimer = 0;
+    function watchIcons() {
+        if (!isTop || !document.head || typeof MutationObserver !== "function") {
+            return;
+        }
+        try {
+            var mo = new MutationObserver(function () {
+                if (iconTimer) {
+                    clearTimeout(iconTimer);
+                }
+                iconTimer = setTimeout(sendIcon, 300);
+            });
+            mo.observe(document.head, { childList: true });
+            setTimeout(function () {
+                mo.disconnect();
+            }, 8000);
         } catch (e) {
         }
     }
@@ -287,6 +313,7 @@
 
     document.addEventListener("DOMContentLoaded", function () {
         sendIcon();
+        watchIcons();
         evalDark();
     }, { once: true });
     G.addEventListener("load", function () {
