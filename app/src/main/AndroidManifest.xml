@@ -158,7 +158,6 @@
             android:name=".grepmd5appActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="true" />
-        
         <activity
             android:name=".htmlview"
             android:configChanges="keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
