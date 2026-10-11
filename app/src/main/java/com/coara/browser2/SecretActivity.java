@@ -86,7 +86,6 @@ import com.coara.browser2.plugin.PluginManagerActivity;
 import com.coara.browser2.plugin.PluginManager;
 import com.coara.browser2.plugin.PluginRuntime;
 import com.coara.browser2.util.KeyboardSettings;
-import com.coara.browser2.util.DesktopContentOptimizer;
 import com.coara.browser2.util.TouchpadController;
 import com.coara.browser2.util.TouchpadOverlayController;
 import com.coara.browser2.util.TouchpadSettings;
@@ -127,7 +126,6 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     private static final String KEY_IMG_BLOCK_ENABLED = "img_block_enabled";
     private static final String KEY_UA_ENABLED = "ua_enabled";
     private static final String KEY_DESKUA_ENABLED = "deskua_enabled";
-    private static final String KEY_CT3UA_ENABLED = "ct3ua_enabled";
     private static final String KEY_BOOKMARKS = "bookmarks";
     private static final String KEY_HISTORY = "history";
     private static final String START_PAGE = BrowserConstants.APP_ASSET_SECRET_PAGE;
@@ -168,12 +166,11 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     private boolean zoomEnabled = true;
     private boolean jsEnabled = true;
     private boolean imgBlockEnabled = false;
+    private static final String GALAKE_UA = "DoCoMo/2.0 SH902i(c100;TB)";
     private boolean uaEnabled = false;
     private boolean deskuaEnabled = false;
-    private boolean ct3uaEnabled = false;
 
     private LruCache<String, Bitmap> faviconCache;
-    private final Map<BrowserView, String> originalUserAgents = new HashMap<>();
     private final Map<BrowserView, Runnable> pendingSpaHistoryTasks = new HashMap<>();
     private boolean defaultLoadsImagesAutomatically;
     private boolean defaultLoadsImagesAutomaticallyInitialized = false;
@@ -236,7 +233,6 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         imgBlockEnabled = pref.getBoolean(KEY_IMG_BLOCK_ENABLED, false);
         uaEnabled = pref.getBoolean(KEY_UA_ENABLED, false);
         deskuaEnabled = pref.getBoolean(KEY_DESKUA_ENABLED, false);
-        ct3uaEnabled = pref.getBoolean(KEY_CT3UA_ENABLED, false);
         final int maxMemory = (int) (Runtime.getRuntime().maxMemory() / 1024);
         final int cacheSize = Math.max(512, Math.min(maxMemory / 32, 2048));
         faviconCache = new LruCache<String, Bitmap>(cacheSize) {
@@ -454,27 +450,23 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             return;
         }
         pluginReloadRunning = true;
-        try {
-            pluginManager.reloadIfChanged();
-            BrowserView current = getCurrentWebView();
-            if (current != null) {
-                String url = null;
+        pluginManager.reloadIfChanged();
+        PluginRuntime.applyRegistrationsThen(new Runnable() {
+            @Override
+            public void run() {
                 try {
-                    url = current.getUrl();
-                } catch (Exception ignored) {
-                }
-                if (url != null && !url.isEmpty()) {
-                    PluginRuntime.prepareForFullReload(current);
-                    current.stopLoading();
-                    current.reload();
+                    if (isFinishing() || isDestroyed()) {
+                        return;
+                    }
+                    reloadTabsForSettings();
+                    lastPluginRuntimeVersion = pluginManager.runtimeVersion();
+                    pluginReloadPending = false;
+                    UiThread.mainHandler().removeCallbacks(reloadOpenTabsForPluginsRunnable);
+                } finally {
+                    pluginReloadRunning = false;
                 }
             }
-            lastPluginRuntimeVersion = pluginManager.runtimeVersion();
-            pluginReloadPending = false;
-            UiThread.mainHandler().removeCallbacks(reloadOpenTabsForPluginsRunnable);
-        } finally {
-            pluginReloadRunning = false;
-        }
+        });
     }
 
     @Override
@@ -583,6 +575,9 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     @Override
     public void onConfigurationChanged(android.content.res.Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        if (deskuaEnabled) {
+            BrowserEngine.get().updateDesktopViewport(this);
+        }
         TouchpadOverlayController.onConfigurationChanged(this, pref);
     }
 
@@ -614,7 +609,6 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             webView = null;
         }
         webViewContainer.removeAllViews();
-        originalUserAgents.clear();
         backgroundExecutor.shutdown();
         super.onDestroy();
     }
@@ -879,22 +873,15 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         BrowserSettings settings = webView.getSettings();
-        String defaultUA = settings.getUserAgentString();
-        originalUserAgents.put(webView, defaultUA);
         settings.setZoomEnabled(zoomEnabled);
         settings.setJavaScriptEnabled(jsEnabled);
         settings.setCacheMode(BrowserSettings.CACHE_BYPASS);
         settings.setLoadsImagesAutomatically(!imgBlockEnabled);
 
-        if (uaEnabled) {
-            settings.setUserAgentString("DoCoMo/2.0 SH902i(c100;TB)");
-        } else if (deskuaEnabled) {
-            settings.setDesktopMode(true);
-            settings.setUserAgentString(DesktopContentOptimizer.desktopUserAgent(defaultUA));
-        } else if (ct3uaEnabled) {
-            settings.setUserAgentString("Mozilla/5.0 (Linux; Android 7.0; TAB-A03-BR3 Build/02.05.000; wv) " +
-                "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/83.0.4103.106 Safari/537.36");
+        if (deskuaEnabled) {
+            BrowserEngine.get().updateDesktopViewport(this);
         }
+        applyTabModes(webView);
 
         PluginRuntime.attach(this, webView);
 
@@ -1435,15 +1422,13 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     @Override
     public boolean onPrepareOptionsMenu(Menu menu) {
         MenuItem darkModeItem = menu.findItem(R.id.action_dark_mode);
-        darkModeItem.setVisible(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q);
+        darkModeItem.setVisible(true);
         darkModeItem.setCheckable(true);
         darkModeItem.setChecked(darkModeEnabled);
         MenuItem uaItem = menu.findItem(R.id.action_ua);
         if (uaItem != null) uaItem.setChecked(uaEnabled);
         MenuItem deskuaItem = menu.findItem(R.id.action_deskua);
         if (deskuaItem != null) deskuaItem.setChecked(deskuaEnabled);
-        MenuItem ct3uaItem = menu.findItem(R.id.action_ct3ua);
-        if (ct3uaItem != null) ct3uaItem.setChecked(ct3uaEnabled);
         MenuItem zoomItem = menu.findItem(R.id.action_zoom_toggle);
         if (zoomItem != null) zoomItem.setChecked(zoomEnabled);
         MenuItem jsItem = menu.findItem(R.id.action_js);
@@ -1458,15 +1443,11 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     public boolean onOptionsItemSelected(MenuItem item) {
         int id = item.getItemId();
         if (id == R.id.action_dark_mode) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                darkModeEnabled = !darkModeEnabled;
-                item.setChecked(darkModeEnabled);
-                updateDarkMode();
-                pref.edit().putBoolean(KEY_DARK_MODE, darkModeEnabled).apply();
-                Toast.makeText(this, "ダークモード " + (darkModeEnabled ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
-            } else {
-                Toast.makeText(this, "この機能はAndroid 10以上で利用可能です", Toast.LENGTH_SHORT).show();
-            }
+            darkModeEnabled = !darkModeEnabled;
+            item.setChecked(darkModeEnabled);
+            pref.edit().putBoolean(KEY_DARK_MODE, darkModeEnabled).apply();
+            updateDarkMode();
+            Toast.makeText(this, "ダークモード " + (darkModeEnabled ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
         } else if (id == R.id.action_Settings) {
             startActivity(new Intent(SecretActivity.this, SettingsActivity.class));
         } else if (id == R.id.action_keyboard_settings) {
@@ -1480,8 +1461,6 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             startActivity(new Intent(SecretActivity.this, PluginManagerActivity.class));
         } else if (id == R.id.action_plugin_commands) {
             showPluginCommands();
-        } else if (id == R.id.action_exec) {
-            startActivity(new Intent(SecretActivity.this, exec.class));
         } else if (id == R.id.action_downloads) {
             startActivity(new Intent(SecretActivity.this, DownloadHistoryActivity.class));
         } else if (id == R.id.action_qr) {
@@ -1549,67 +1528,24 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             item.setChecked(imgBlockEnabled);
             pref.edit().putBoolean(KEY_IMG_BLOCK_ENABLED, imgBlockEnabled).apply();
         } else if (id == R.id.action_ua) {
-            if (!uaEnabled) {
-                if (deskuaEnabled) {
-                    disabledeskUA();
-                    deskuaEnabled = false;
-                    pref.edit().putBoolean(KEY_DESKUA_ENABLED, false).apply();
-                }
-                if (ct3uaEnabled) {
-                    disableCT3UA();
-                    ct3uaEnabled = false;
-                    pref.edit().putBoolean(KEY_CT3UA_ENABLED, false).apply();
-                }
-                enableUA();
-                uaEnabled = true;
-            } else {
-                disableUA();
-                uaEnabled = false;
-            }
-            item.setChecked(uaEnabled);
-            pref.edit().putBoolean(KEY_UA_ENABLED, uaEnabled).apply();
-            invalidateOptionsMenu();
-        } else if (id == R.id.action_deskua) {
-            if (!deskuaEnabled) {
-                if (uaEnabled) {
-                    disableUA();
-                    uaEnabled = false;
-                    pref.edit().putBoolean(KEY_UA_ENABLED, false).apply();
-                }
-                if (ct3uaEnabled) {
-                    disableCT3UA();
-                    ct3uaEnabled = false;
-                    pref.edit().putBoolean(KEY_CT3UA_ENABLED, false).apply();
-                }
-                enabledeskUA();
-                deskuaEnabled = true;
-            } else {
-                disabledeskUA();
+            uaEnabled = !uaEnabled;
+            if (uaEnabled) {
                 deskuaEnabled = false;
             }
-            item.setChecked(deskuaEnabled);
-            pref.edit().putBoolean(KEY_DESKUA_ENABLED, deskuaEnabled).apply();
+            pref.edit().putBoolean(KEY_UA_ENABLED, uaEnabled).putBoolean(KEY_DESKUA_ENABLED, deskuaEnabled).apply();
+            item.setChecked(uaEnabled);
+            Toast.makeText(this, uaEnabled ? "ガラケーUA有効" : "ガラケーUA解除", Toast.LENGTH_SHORT).show();
+            onTabModeChanged();
             invalidateOptionsMenu();
-        } else if (id == R.id.action_ct3ua) {
-            if (!ct3uaEnabled) {
-                if (uaEnabled) {
-                    disableUA();
-                    uaEnabled = false;
-                    pref.edit().putBoolean(KEY_UA_ENABLED, false).apply();
-                }
-                if (deskuaEnabled) {
-                    disabledeskUA();
-                    deskuaEnabled = false;
-                    pref.edit().putBoolean(KEY_DESKUA_ENABLED, false).apply();
-                }
-                enableCT3UA();
-                ct3uaEnabled = true;
-            } else {
-                disableCT3UA();
-                ct3uaEnabled = false;
+        } else if (id == R.id.action_deskua) {
+            deskuaEnabled = !deskuaEnabled;
+            if (deskuaEnabled) {
+                uaEnabled = false;
             }
-            item.setChecked(ct3uaEnabled);
-            pref.edit().putBoolean(KEY_CT3UA_ENABLED, ct3uaEnabled).apply();
+            pref.edit().putBoolean(KEY_UA_ENABLED, uaEnabled).putBoolean(KEY_DESKUA_ENABLED, deskuaEnabled).apply();
+            item.setChecked(deskuaEnabled);
+            Toast.makeText(this, deskuaEnabled ? "デスクトップ表示有効" : "デスクトップ表示無効", Toast.LENGTH_SHORT).show();
+            onTabModeChanged();
             invalidateOptionsMenu();
         } else if (id == R.id.action_basic_auth) {
             if (!basicAuthEnabled) {
@@ -1748,15 +1684,39 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         }
     }
 
-    private void reloadCurrentPage() {
-        BrowserView currentWebView = getCurrentWebView();
-        if (currentWebView != null) {
-            currentWebView.clearCache(true);
-            String currentUrl = currentWebView.getUrl();
-            if (currentUrl != null && !currentUrl.isEmpty()) {
-                currentWebView.loadUrl(currentUrl);
-            }
+    private void applyTabModes(BrowserView view) {
+        BrowserSettings s = view.getSettings();
+        s.setUserAgentString(uaEnabled ? GALAKE_UA : null);
+        s.setDesktopMode(deskuaEnabled && !uaEnabled);
+    }
+
+    private void onTabModeChanged() {
+        BrowserEngine.get().updateDesktopViewport(this);
+        BrowserView only = getCurrentWebView();
+        if (only != null) {
+            applyTabModes(only);
         }
+        reloadTabsForSettings();
+    }
+
+    private void reloadCurrentPage() {
+        BrowserView current = getCurrentWebView();
+        if (current == null) {
+            return;
+        }
+        String u = current.getUrl();
+        if (u == null || u.isEmpty() || u.equals("about:blank")) {
+            return;
+        }
+        try {
+            PluginRuntime.prepareForFullReload(current);
+            current.reloadForSettings();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void reloadTabsForSettings() {
+        reloadCurrentPage();
     }
 
     private void clearPageCache() {
@@ -1840,73 +1800,11 @@ private void saveScreenshot(Bitmap bitmap) {
 }
 
     private void updateDarkMode() {
-        BrowserView current = getCurrentWebView();
-        if (current == null) {
-            return;
-        }
         BrowserEngine.get().setDarkMode(darkModeEnabled);
-        current.reload();
+        reloadTabsForSettings();
     }
 
-    private void enableCT3UA() {
-        BrowserSettings settings = getCurrentWebView().getSettings();
-        settings.setUserAgentString("Mozilla/5.0 (Linux; Android 7.0; TAB-A03-BR3 Build/02.05.000; wv) " +
-                "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/83.0.4103.106 Safari/537.36");
-        Toast.makeText(SecretActivity.this, "CT3UA適用", Toast.LENGTH_SHORT).show();
-        reloadCurrentPage();
-    }
-
-    private void disableCT3UA() {
-        BrowserSettings settings = getCurrentWebView().getSettings();
-        String originalUA = originalUserAgents.get(getCurrentWebView());
-        if (originalUA != null) {
-            settings.setUserAgentString(originalUA);
-        }
-        Toast.makeText(SecretActivity.this, "CT3UA解除", Toast.LENGTH_SHORT).show();
-        reloadCurrentPage();
-    }
-
-    private void enabledeskUA() {
-        BrowserSettings settings = getCurrentWebView().getSettings();
-        String originalUA = originalUserAgents.get(getCurrentWebView());
-        if (originalUA == null) {
-            originalUA = settings.getUserAgentString();
-        }
-        String desktopUA = DesktopContentOptimizer.desktopUserAgent(originalUA);
-        settings.setDesktopMode(true);
-        settings.setUserAgentString(desktopUA);
-        Toast.makeText(SecretActivity.this, "デスクトップ表示有効", Toast.LENGTH_SHORT).show();
-        reloadCurrentPage();
-    }
-
-    private void disabledeskUA() {
-        BrowserSettings settings = getCurrentWebView().getSettings();
-        String originalUA = originalUserAgents.get(getCurrentWebView());
-        if (originalUA != null) {
-            settings.setUserAgentString(originalUA);
-        }
-        reloadCurrentPage();
-        Toast.makeText(SecretActivity.this, "デスクトップ表示無効", Toast.LENGTH_SHORT).show();
-    }
-
-    private void enableUA() {
-        BrowserSettings settings = getCurrentWebView().getSettings();
-        settings.setUserAgentString("DoCoMo/2.0 SH902i(c100;TB)");
-        Toast.makeText(SecretActivity.this, "ガラケーUA有効", Toast.LENGTH_SHORT).show();
-        reloadCurrentPage();
-    }
-
-    private void disableUA() {
-        BrowserSettings settings = getCurrentWebView().getSettings();
-        String originalUA = originalUserAgents.get(getCurrentWebView());
-        if (originalUA != null) {
-            settings.setUserAgentString(originalUA);
-        }
-        Toast.makeText(SecretActivity.this, "ガラケーUA解除", Toast.LENGTH_SHORT).show();
-        reloadCurrentPage();
-    }
-
-    private void disablejs() {
+                            private void disablejs() {
         BrowserSettings settings = getCurrentWebView().getSettings();
         settings.setJavaScriptEnabled(false);
         Toast.makeText(SecretActivity.this, "JavaScript無効", Toast.LENGTH_SHORT).show();

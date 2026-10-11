@@ -98,7 +98,6 @@ import com.coara.browser2.plugin.PluginRuntime;
 import com.coara.browser2.util.BrowserVisualSettings;
 import com.coara.browser2.util.BrowserMenuController;
 import com.coara.browser2.util.BrowserThemeManager;
-import com.coara.browser2.util.DesktopContentOptimizer;
 import com.coara.browser2.util.KeyboardSettings;
 import com.coara.browser2.util.TouchpadController;
 import com.coara.browser2.util.TouchpadOverlayController;
@@ -146,6 +145,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
     private static final String PREF_NAME = BrowserConstants.PREF_NAME;
     private static final String KEY_CURRENT_TAB_ID = BrowserConstants.KEY_CURRENT_TAB_ID;
+    private static final String KEY_NEXT_TAB_ID = "next_tab_id";
     private static final String KEY_DARK_MODE = BrowserConstants.KEY_DARK_MODE;
     private static final String KEY_BASIC_AUTH = BrowserConstants.KEY_BASIC_AUTH;
     private static final String KEY_ZOOM_ENABLED = BrowserConstants.KEY_ZOOM_ENABLED;
@@ -153,7 +153,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private static final String KEY_IMG_BLOCK_ENABLED = BrowserConstants.KEY_IMG_BLOCK_ENABLED;
     private static final String KEY_UA_ENABLED = BrowserConstants.KEY_UA_ENABLED;
     private static final String KEY_DESKUA_ENABLED = BrowserConstants.KEY_DESKUA_ENABLED;
-    private static final String KEY_CT3UA_ENABLED = BrowserConstants.KEY_CT3UA_ENABLED;
     private static final String KEY_TABS = BrowserConstants.KEY_TABS;
     private static final String KEY_CURRENT_TAB = BrowserConstants.KEY_CURRENT_TAB;
     private static final String KEY_BOOKMARKS = BrowserConstants.KEY_BOOKMARKS;
@@ -211,12 +210,14 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private boolean zoomEnabled = false;
     private boolean jsEnabled = false;
     private boolean imgBlockEnabled = false;
+    private static final String GALAKE_UA = "DoCoMo/2.0 SH902i(c100;TB)";
     private boolean uaEnabled = false;
     private boolean deskuaEnabled = false;
-    private boolean ct3uaEnabled = false;
 
     private LruCache<String, Bitmap> faviconCache;
-    private final Map<BrowserView, String> originalUserAgents = new HashMap<>();
+    private final Set<String> faviconMissing = Collections.synchronizedSet(new java.util.HashSet<String>());
+    private final Set<String> faviconLoading = Collections.synchronizedSet(new java.util.HashSet<String>());
+    private final ExecutorService faviconExecutor = Executors.newFixedThreadPool(2);
     private boolean defaultLoadsImagesAutomatically;
     private boolean defaultLoadsImagesAutomaticallyInitialized = false;
     private boolean fullScreenActive = false;
@@ -229,6 +230,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     
     private final Map<BrowserView, Boolean> pullToRefreshEligibleCache = new HashMap<>();
     private final Map<BrowserView, PendingTab> pendingTabs = new HashMap<>();
+    private final Set<BrowserView> staleTabs = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
     private final Map<BrowserView, TabHistoryStore.State> tabHistoryStates = new HashMap<>();
     private final Set<BrowserView> backNavigationTabs = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
     private final Map<BrowserView, Integer> virtualBase = new WeakHashMap<>();
@@ -337,7 +339,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         imgBlockEnabled = pref.getBoolean(KEY_IMG_BLOCK_ENABLED, false);
         uaEnabled = pref.getBoolean(KEY_UA_ENABLED, false);
         deskuaEnabled = pref.getBoolean(KEY_DESKUA_ENABLED, false);
-        ct3uaEnabled = pref.getBoolean(KEY_CT3UA_ENABLED, false);
         final int maxMemory = (int)(Runtime.getRuntime().maxMemory() / 1024);
         final int cacheSize = Math.max(1024, Math.min(maxMemory / 16, 8 * 1024));
         faviconCache = new LruCache<String, Bitmap>(cacheSize) {
@@ -676,7 +677,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         if (tabHistoryStore == null) {
             return;
         }
-        if (sync || persistExecutor.isShutdown()) {
+        if (persistExecutor.isShutdown()) {
             tabHistoryStore.save(id, state);
             return;
         }
@@ -755,39 +756,23 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             return;
         }
         pluginReloadRunning = true;
-        try {
-            pluginManager.reloadIfChanged();
-            ArrayList<BrowserView> tabs;
-            synchronized (webViews) {
-                tabs = new ArrayList<>(webViews);
-            }
-            for (BrowserView tab : tabs) {
-                if (tab == null || pendingTabs.containsKey(tab)) {
-                    continue;
-                }
-                String url;
+        pluginManager.reloadIfChanged();
+        PluginRuntime.applyRegistrationsThen(new Runnable() {
+            @Override
+            public void run() {
                 try {
-                    url = tab.getUrl();
-                } catch (Exception ignored) {
-                    url = null;
-                }
-                if (url == null || url.isEmpty()) {
-                    continue;
-                }
-                try {
-                    saveTabHistoryState(tab);
-                    PluginRuntime.prepareForFullReload(tab);
-                    tab.stopLoading();
-                    tab.reload();
-                } catch (Exception ignored) {
+                    if (isFinishing() || isDestroyed()) {
+                        return;
+                    }
+                    reloadTabsForSettings();
+                    lastPluginRuntimeVersion = pluginManager.runtimeVersion();
+                    pluginReloadPending = false;
+                    UiThread.mainHandler().removeCallbacks(pluginReloadRunnable);
+                } finally {
+                    pluginReloadRunning = false;
                 }
             }
-            lastPluginRuntimeVersion = pluginManager.runtimeVersion();
-            pluginReloadPending = false;
-            UiThread.mainHandler().removeCallbacks(pluginReloadRunnable);
-        } finally {
-            pluginReloadRunning = false;
-        }
+        });
     }
 
     @Override
@@ -887,7 +872,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             schedulePluginReload();
         }
         applyBrowserThemeToAllWebViews();
-        DesktopContentOptimizer.apply(getCurrentWebView(), deskuaEnabled);
         if (backgroundImageView != null && backgroundBitmap == null && BrowserVisualSettings.getBackgroundPath(pref) != null) {
             loadBackgroundImage();
         }
@@ -923,6 +907,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     @Override
     public void onConfigurationChanged(android.content.res.Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        if (deskuaEnabled) {
+            BrowserEngine.get().updateDesktopViewport(this);
+        }
         TouchpadOverlayController.onConfigurationChanged(this, pref);
     }
 
@@ -951,6 +938,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         releaseAllWebViews();
         clearBackgroundBitmap();
         backgroundExecutor.shutdown();
+        faviconExecutor.shutdown();
         persistExecutor.shutdown();
         stateSaveTasks.clear();
         BrowserThemeManager.release(this);
@@ -1134,7 +1122,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 pendingTabs.remove(tab);
                 tabHistoryStates.remove(tab);
                 backNavigationTabs.remove(tab);
-                originalUserAgents.remove(tab);
                 try {
                     tab.stopLoading();
                 } catch (Exception ignored) {
@@ -1197,21 +1184,30 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     }
 
     private void saveTabStateBundle(BrowserView webView, int id, boolean sync) {
-        if (webView == null || id < 0) {
+        if (webView == null || id < 0 || TabHistoryStore.isDead(id)) {
             return;
         }
         try {
-            final Bundle state = new Bundle();
-            webView.saveState(state);
+            final BrowserView.StateSource source = webView.captureStateSource();
             dirtyStateTabs.remove(webView);
-            if (state.isEmpty()) {
+            if (source == null) {
                 return;
             }
             final String name = "tab_state_" + id + ".dat";
-            if (sync || persistExecutor.isShutdown()) {
-                saveBundleToFile(state, name);
+            final int tabId = id;
+            Runnable write = () -> {
+                if (TabHistoryStore.isDead(tabId)) {
+                    return;
+                }
+                Bundle state = source.toBundle();
+                if (!state.isEmpty()) {
+                    saveBundleToFile(state, name);
+                }
+            };
+            if (persistExecutor.isShutdown()) {
+                write.run();
             } else {
-                persistExecutor.execute(() -> saveBundleToFile(state, name));
+                persistExecutor.execute(write);
             }
         } catch (Exception ignored) {
         }
@@ -1315,6 +1311,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                                 if (finalSnap.isRecycled()) {
                                     return;
                                 }
+                                if (TabHistoryStore.isDead(finalIdForSnap)) {
+                                    return;
+                                }
                                 File outFile = new File(getFilesDir(), "tab_snapshot_" + finalIdForSnap + ".png");
                                 try (FileOutputStream fos = new FileOutputStream(outFile)) {
                                     finalSnap.compress(Bitmap.CompressFormat.PNG, 80, fos);
@@ -1337,7 +1336,8 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             pref.edit()
                     .putString(KEY_TABS, tabsArray.toString())
                     .putInt(KEY_CURRENT_TAB_ID, currentTabId)
-                    .commit();
+                    .putInt(KEY_NEXT_TAB_ID, nextTabId)
+                    .apply();
         }
     }
 
@@ -1362,7 +1362,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     pendingTabs.remove(old);
                     tabHistoryStates.remove(old);
                     backNavigationTabs.remove(old);
-                    originalUserAgents.remove(old);
                     try {
                         old.stopLoading();
                         old.destroy();
@@ -1389,10 +1388,8 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     pendingTabs.put(webView, new PendingTab(id, url, title, true));
                     webView.onPause();
                 }
-                nextTabId = maxId + 1;
-                if (nextTabId < 0) {
-                    nextTabId = 0;
-                }
+                nextTabId = Math.max(Math.max(0, maxId + 1), pref.getInt(KEY_NEXT_TAB_ID, 0));
+                purgeOrphanTabFiles(tabsArray);
                 if (webViews.isEmpty()) {
                     BrowserView initialWebView = createNewWebView();
                     initialWebView.setTag(nextTabId);
@@ -1442,6 +1439,43 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         }
     }
 
+
+    private void purgeOrphanTabFiles(JSONArray tabsArray) {
+        final Set<String> live = new java.util.HashSet<>();
+        for (int i = 0; i < tabsArray.length(); i++) {
+            JSONObject o = tabsArray.optJSONObject(i);
+            if (o != null) {
+                live.add(String.valueOf(o.optInt("id", -1)));
+            }
+        }
+        final File dir = getFilesDir();
+        final int limit = nextTabId;
+        backgroundExecutor.execute(() -> {
+            File[] files = dir.listFiles();
+            if (files == null) {
+                return;
+            }
+            for (File f : files) {
+                String n = f.getName();
+                String id = null;
+                if (n.startsWith("tab_state_") && n.endsWith(".dat")) {
+                    id = n.substring(10, n.length() - 4);
+                } else if (n.startsWith("tab_snapshot_") && n.endsWith(".png")) {
+                    id = n.substring(13, n.length() - 4);
+                } else if (n.startsWith("tab_history_") && n.endsWith(".json")) {
+                    id = n.substring(12, n.length() - 5);
+                }
+                if (id != null && !live.contains(id)) {
+                    try {
+                        if (Integer.parseInt(id) < limit) {
+                            safeDeleteFile(f);
+                        }
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+            }
+        });
+    }
 
     private void updateTabCount() {
         if (tabCountTextView != null) {
@@ -1495,21 +1529,14 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         BrowserSettings settings = webView.getSettings();
-        String defaultUA = settings.getUserAgentString();
-        originalUserAgents.put(webView, defaultUA);
         settings.setZoomEnabled(zoomEnabled);
         settings.setJavaScriptEnabled(jsEnabled);
         settings.setLoadsImagesAutomatically(!imgBlockEnabled);
 
-        if (uaEnabled) {
-            settings.setUserAgentString("DoCoMo/2.0 SH902i(c100;TB)");
-        } else if (deskuaEnabled) {
-            settings.setDesktopMode(true);
-            settings.setUserAgentString(DesktopContentOptimizer.desktopUserAgent(defaultUA));
-        } else if (ct3uaEnabled) {
-            settings.setUserAgentString("Mozilla/5.0 (Linux; Android 7.0; TAB-A03-BR3 Build/02.05.000; wv) " +
-                "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/83.0.4103.106 Safari/537.36");
+        if (deskuaEnabled) {
+            BrowserEngine.get().updateDesktopViewport(this);
         }
+        applyTabModes(webView);
 
         applyBrowserVisualSettings(webView);
         PluginRuntime.attach(this, webView);
@@ -1541,6 +1568,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 if (view == getCurrentWebView()) {
                     urlEditText.setText(url);
                     updatePullToRefreshState(view, url);
+                    showCachedFavicon(url);
                 }
             }
 
@@ -1548,9 +1576,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             public void onPageCommitVisible(BrowserView view, String url) {
                 PluginRuntime.onPageCommitVisible(view, url);
                 BrowserThemeManager.applyPageTheme(view, MainActivity.this, url);
-                if (deskuaEnabled) {
-                    DesktopContentOptimizer.apply(view, true);
-                }
             }
 
             @Override
@@ -1560,7 +1585,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 }
                 if (sameDocument) {
                     scheduleSpaHistoryUpdate(view, url);
-                    DesktopContentOptimizer.apply(view, deskuaEnabled);
                 }
                 if (!urlEditMode && !url.equals(START_PAGE)) {
                     urlEditText.setText(url);
@@ -1581,25 +1605,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 if (url.startsWith(BrowserConstants.APP_ASSET_BASE_URL)) {
                     BrowserThemeManager.applyToWebView(view, MainActivity.this);
                 }
-                DesktopContentOptimizer.apply(view, deskuaEnabled);
                 dirtyStateTabs.add(view);
-                UiThread.postDelayed(() -> {
-                    if (view == getCurrentWebView() && !view.isLoading()) {
-                        captureTabSnapshot(view);
-                    }
-                }, 1500L);
-                if (deskuaEnabled) {
-                    final String capturedUrl = url;
-                    UiThread.postDelayed(() -> {
-                        try {
-                            String cur = view.getUrl();
-                            if (cur != null && cur.equals(capturedUrl)) {
-                                DesktopContentOptimizer.apply(view, true);
-                            }
-                        } catch (Exception ignored) {
-                        }
-                    }, 1500);
-                }
                 if (url.equals(START_PAGE)) {
                     faviconImageView.setVisibility(View.GONE);
                     if (view == getCurrentWebView()) {
@@ -1610,6 +1616,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     if (view == getCurrentWebView()) {
                         urlEditText.setText(url);
                         updatePullToRefreshState(view, url);
+                        showCachedFavicon(url);
                     }
                 }
                 clearPendingSpaHistory(view);
@@ -1710,15 +1717,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 if (view == getCurrentWebView()) {
                     if (!urlEditMode) faviconImageView.setImageBitmap(icon);
                 }
-                String currentUrl = view.getUrl();
-                if (currentUrl != null) {
-                    Bitmap previousIcon = faviconCache.get(currentUrl);
-                    boolean unchanged = previousIcon != null && (previousIcon == icon || previousIcon.sameAs(icon));
-                    faviconCache.put(currentUrl, icon);
-                    if (!unchanged) {
-                        backgroundExecutor.execute(() -> saveFaviconToFile(currentUrl, icon));
-                    }
-                }
+                storeFavicon(view.getUrl(), icon);
             }
 
             @Override
@@ -2002,7 +2001,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             }
             pullToRefreshEligibleCache.remove(crashed);
             pendingTabs.remove(crashed);
-            originalUserAgents.remove(crashed);
 
             if (wasCurrent) {
                 try {
@@ -2633,7 +2631,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             pendingTabs.remove(webView);
             tabHistoryStates.remove(webView);
             backNavigationTabs.remove(webView);
-            originalUserAgents.remove(webView);
             if (id != -1) {
                 if (tabHistoryStore != null) {
                     tabHistoryStore.delete(id);
@@ -3039,6 +3036,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         TouchpadController.setCurrentWebView(next);
         KeyboardSettings.configureWebView(next, pref);
         ensureTabLoaded(next);
+        if (staleTabs.remove(next)) {
+            reloadTabNow(next);
+        }
         webViewContainer.addView(next);
         try {
             next.onResume();
@@ -3049,8 +3049,8 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         }
         applyBrowserVisualSettings(next);
         BrowserThemeManager.applyToWebView(next, this);
-        DesktopContentOptimizer.apply(next, deskuaEnabled);
         urlEditText.setText(next.getUrl());
+        showCachedFavicon(next.getUrl());
         updatePullToRefreshState(next, next.getUrl());
     }
 
@@ -3201,15 +3201,13 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     @Override
     public boolean onPrepareOptionsMenu(Menu menu) {
         MenuItem darkModeItem = menu.findItem(R.id.action_dark_mode);
-        darkModeItem.setVisible(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q);
+        darkModeItem.setVisible(true);
         darkModeItem.setCheckable(true);
         darkModeItem.setChecked(darkModeEnabled);
         MenuItem uaItem = menu.findItem(R.id.action_ua);
         if (uaItem != null) uaItem.setChecked(uaEnabled);
         MenuItem deskuaItem = menu.findItem(R.id.action_deskua);
         if (deskuaItem != null) deskuaItem.setChecked(deskuaEnabled);
-        MenuItem ct3uaItem = menu.findItem(R.id.action_ct3ua);
-        if (ct3uaItem != null) ct3uaItem.setChecked(ct3uaEnabled);
         MenuItem zoomItem = menu.findItem(R.id.action_zoom_toggle);
         if (zoomItem != null) zoomItem.setChecked(zoomEnabled);
         MenuItem jsItem = menu.findItem(R.id.action_js);
@@ -3258,15 +3256,11 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             }
             return true;
         } else if (id == R.id.action_dark_mode) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                darkModeEnabled = !darkModeEnabled;
-                item.setChecked(darkModeEnabled);
-                updateDarkMode();
-                pref.edit().putBoolean(KEY_DARK_MODE, darkModeEnabled).apply();
-                Toast.makeText(this, "ダークモード " + (darkModeEnabled ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
-            } else {
-                Toast.makeText(this, "この機能はAndroid 10以上で利用可能です", Toast.LENGTH_SHORT).show();
-            }
+            darkModeEnabled = !darkModeEnabled;
+            item.setChecked(darkModeEnabled);
+            pref.edit().putBoolean(KEY_DARK_MODE, darkModeEnabled).apply();
+            updateDarkMode();
+            Toast.makeText(this, "ダークモード " + (darkModeEnabled ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
         } else if (id == R.id.action_Settings) {
             startActivity(new Intent(MainActivity.this, SettingsActivity.class));
         } else if (id == R.id.action_keyboard_settings) {
@@ -3284,8 +3278,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             startActivity(new Intent(MainActivity.this, PluginManagerActivity.class));
         } else if (id == R.id.action_plugin_commands) {
             showPluginCommands();
-        } else if (id == R.id.action_exec) {
-            startActivity(new Intent(MainActivity.this, exec.class));
         } else if (id == R.id.action_downloads) {
             startActivity(new Intent(MainActivity.this, DownloadHistoryActivity.class));
         } else if (id == R.id.action_qr) {
@@ -3353,68 +3345,24 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             item.setChecked(imgBlockEnabled);
             pref.edit().putBoolean(KEY_IMG_BLOCK_ENABLED, imgBlockEnabled).apply();
         } else if (id == R.id.action_ua) {
-            if (!uaEnabled) {
-                if (deskuaEnabled) {
-                    disabledeskUA();
-                    deskuaEnabled = false;
-                    pref.edit().putBoolean(KEY_DESKUA_ENABLED, false).apply();
-                }
-                if (ct3uaEnabled) {
-                    disableCT3UA();
-                    ct3uaEnabled = false;
-                    pref.edit().putBoolean(KEY_CT3UA_ENABLED, false).apply();
-                }
-                enableUA();
-                uaEnabled = true;
-            } else {
-                disableUA();
-                uaEnabled = false;
-            }
-            item.setChecked(uaEnabled);
-            pref.edit().putBoolean(KEY_UA_ENABLED, uaEnabled).apply();
-            invalidateOptionsMenu();
-        } else if (id == R.id.action_deskua) {
-            if (!deskuaEnabled) {
-                if (uaEnabled) {
-                    disableUA();
-                    uaEnabled = false;
-                    pref.edit().putBoolean(KEY_UA_ENABLED, false).apply();
-                }
-                if (ct3uaEnabled) {
-                    disableCT3UA();
-                    ct3uaEnabled = false;
-                    pref.edit().putBoolean(KEY_CT3UA_ENABLED, false).apply();
-                }
-                enabledeskUA();
-                deskuaEnabled = true;
-            } else {
-                disabledeskUA();
+            uaEnabled = !uaEnabled;
+            if (uaEnabled) {
                 deskuaEnabled = false;
             }
-            item.setChecked(deskuaEnabled);
-            pref.edit().putBoolean(KEY_DESKUA_ENABLED, deskuaEnabled).apply();
-            DesktopContentOptimizer.apply(getCurrentWebView(), deskuaEnabled);
+            pref.edit().putBoolean(KEY_UA_ENABLED, uaEnabled).putBoolean(KEY_DESKUA_ENABLED, deskuaEnabled).apply();
+            item.setChecked(uaEnabled);
+            Toast.makeText(this, uaEnabled ? "ガラケーUA有効" : "ガラケーUA解除", Toast.LENGTH_SHORT).show();
+            onTabModeChanged();
             invalidateOptionsMenu();
-        } else if (id == R.id.action_ct3ua) {
-            if (!ct3uaEnabled) {
-                if (uaEnabled) {
-                    disableUA();
-                    uaEnabled = false;
-                    pref.edit().putBoolean(KEY_UA_ENABLED, false).apply();
-                }
-                if (deskuaEnabled) {
-                    disabledeskUA();
-                    deskuaEnabled = false;
-                    pref.edit().putBoolean(KEY_DESKUA_ENABLED, false).apply();
-                }
-                enableCT3UA();
-                ct3uaEnabled = true;
-            } else {
-                disableCT3UA();
-                ct3uaEnabled = false;
+        } else if (id == R.id.action_deskua) {
+            deskuaEnabled = !deskuaEnabled;
+            if (deskuaEnabled) {
+                uaEnabled = false;
             }
-            item.setChecked(ct3uaEnabled);
-            pref.edit().putBoolean(KEY_CT3UA_ENABLED, ct3uaEnabled).apply();
+            pref.edit().putBoolean(KEY_UA_ENABLED, uaEnabled).putBoolean(KEY_DESKUA_ENABLED, deskuaEnabled).apply();
+            item.setChecked(deskuaEnabled);
+            Toast.makeText(this, deskuaEnabled ? "デスクトップ表示有効" : "デスクトップ表示無効", Toast.LENGTH_SHORT).show();
+            onTabModeChanged();
             invalidateOptionsMenu();
         } else if (id == R.id.action_basic_auth) {
             if (!basicAuthEnabled) {
@@ -3510,13 +3458,54 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         BrowserEngine.get().clearDomStorage();
     }
 
+    private void applyTabModes(BrowserView view) {
+        BrowserSettings s = view.getSettings();
+        s.setUserAgentString(uaEnabled ? GALAKE_UA : null);
+        s.setDesktopMode(deskuaEnabled && !uaEnabled);
+    }
+
+    private void onTabModeChanged() {
+        BrowserEngine.get().updateDesktopViewport(this);
+        for (BrowserView v : new ArrayList<>(webViews)) {
+            applyTabModes(v);
+        }
+        reloadTabsForSettings();
+    }
+
     private void reloadCurrentPage() {
-        BrowserView currentWebView = getCurrentWebView();
-        if (currentWebView != null) {
-            currentWebView.clearCache(true);
-            String currentUrl = currentWebView.getUrl();
-            if (currentUrl != null && !currentUrl.isEmpty()) {
-                currentWebView.loadUrl(currentUrl);
+        BrowserView current = getCurrentWebView();
+        if (current != null) {
+            reloadTabNow(current);
+        }
+    }
+
+    private void reloadTabNow(BrowserView view) {
+        staleTabs.remove(view);
+        if (view == null || pendingTabs.containsKey(view)) {
+            return;
+        }
+        String u = view.getUrl();
+        if (u == null || u.isEmpty() || u.equals("about:blank")) {
+            return;
+        }
+        try {
+            saveTabHistoryState(view);
+            PluginRuntime.prepareForFullReload(view);
+            view.reloadForSettings();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void reloadTabsForSettings() {
+        BrowserView cur = getCurrentWebView();
+        for (BrowserView v : new ArrayList<>(webViews)) {
+            if (pendingTabs.containsKey(v)) {
+                continue;
+            }
+            if (v == cur) {
+                reloadTabNow(v);
+            } else {
+                staleTabs.add(v);
             }
         }
     }
@@ -3594,7 +3583,10 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         final File dir = new File(getFilesDir(), "favicons");
         final Set<String> keep = new java.util.HashSet<>();
         for (Bookmark b : new ArrayList<>(bookmarks)) {
-            keep.add(getFaviconFilename(b.getUrl()));
+            String fk = faviconKey(b.getUrl());
+            if (fk != null) {
+                keep.add(getFaviconFilename(fk));
+            }
         }
         backgroundExecutor.execute(() -> {
             File[] files = dir.listFiles();
@@ -3636,7 +3628,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 pendingTabs.remove(w);
                 tabHistoryStates.remove(w);
                 backNavigationTabs.remove(w);
-                originalUserAgents.remove(w);
                 if (id != -1) {
                     if (tabHistoryStore != null) {
                         tabHistoryStore.delete(id);
@@ -3729,80 +3720,23 @@ private void saveScreenshot(Bitmap bitmap) {
 
     private void updateDarkMode() {
         BrowserEngine.get().setDarkMode(darkModeEnabled);
-        for (BrowserView webView : webViews) {
-            BrowserThemeManager.applyToWebView(webView, this);
+        reloadTabsForSettings();
+    }
+
+                            private void disablejs() {
+        for (BrowserView v : new ArrayList<>(webViews)) {
+            v.getSettings().setJavaScriptEnabled(false);
         }
-    }
-
-    private void enableCT3UA() {
-        BrowserSettings settings = getCurrentWebView().getSettings();
-        settings.setUserAgentString("Mozilla/5.0 (Linux; Android 7.0; TAB-A03-BR3 Build/02.05.000; wv) " +
-                "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/83.0.4103.106 Safari/537.36");
-        Toast.makeText(MainActivity.this, "CT3UA適用", Toast.LENGTH_SHORT).show();
-        reloadCurrentPage();
-    }
-
-    private void disableCT3UA() {
-        BrowserSettings settings = getCurrentWebView().getSettings();
-        String originalUA = originalUserAgents.get(getCurrentWebView());
-        if (originalUA != null) {
-            settings.setUserAgentString(originalUA);
-        }
-        Toast.makeText(MainActivity.this, "CT3UA解除", Toast.LENGTH_SHORT).show();
-        reloadCurrentPage();
-    }
-
-    private void enabledeskUA() {
-        BrowserSettings settings = getCurrentWebView().getSettings();
-        String originalUA = originalUserAgents.get(getCurrentWebView());
-        if (originalUA == null) {
-            originalUA = settings.getUserAgentString();
-        }
-        String desktopUA = DesktopContentOptimizer.desktopUserAgent(originalUA);
-        settings.setDesktopMode(true);
-        settings.setUserAgentString(desktopUA);
-        Toast.makeText(MainActivity.this, "デスクトップ表示有効", Toast.LENGTH_SHORT).show();
-        reloadCurrentPage();
-    }
-
-    private void disabledeskUA() {
-        BrowserSettings settings = getCurrentWebView().getSettings();
-        settings.setDesktopMode(false);
-        String originalUA = originalUserAgents.get(getCurrentWebView());
-        if (originalUA != null) {
-            settings.setUserAgentString(originalUA);
-        }
-        reloadCurrentPage();
-        Toast.makeText(MainActivity.this, "デスクトップ表示無効", Toast.LENGTH_SHORT).show();
-    }
-
-    private void enableUA() {
-        BrowserSettings settings = getCurrentWebView().getSettings();
-        settings.setUserAgentString("DoCoMo/2.0 SH902i(c100;TB)");
-        Toast.makeText(MainActivity.this, "ガラケーUA有効", Toast.LENGTH_SHORT).show();
-        reloadCurrentPage();
-    }
-
-    private void disableUA() {
-        BrowserSettings settings = getCurrentWebView().getSettings();
-        String originalUA = originalUserAgents.get(getCurrentWebView());
-        if (originalUA != null) {
-            settings.setUserAgentString(originalUA);
-        }
-        Toast.makeText(MainActivity.this, "ガラケーUA解除", Toast.LENGTH_SHORT).show();
-        reloadCurrentPage();
-    }
-
-    private void disablejs() {
-        BrowserSettings settings = getCurrentWebView().getSettings();
-        settings.setJavaScriptEnabled(false);
         Toast.makeText(MainActivity.this, "JavaScript無効", Toast.LENGTH_SHORT).show();
+        reloadTabsForSettings();
     }
 
     private void enablejs() {
-        BrowserSettings settings = getCurrentWebView().getSettings();
-        settings.setJavaScriptEnabled(true);
+        for (BrowserView v : new ArrayList<>(webViews)) {
+            v.getSettings().setJavaScriptEnabled(true);
+        }
         Toast.makeText(MainActivity.this, "JavaScript有効", Toast.LENGTH_SHORT).show();
+        reloadTabsForSettings();
     }
 
     private void applyZoomSettingToAllWebViews() {
@@ -3846,19 +3780,21 @@ private void saveScreenshot(Bitmap bitmap) {
     }
 
     private void enableimgblock() {
-        BrowserSettings settings = getCurrentWebView().getSettings();
-        settings.setLoadsImagesAutomatically(false);
-        reloadCurrentPage();
+        for (BrowserView v : new ArrayList<>(webViews)) {
+            v.getSettings().setLoadsImagesAutomatically(false);
+        }
         Toast.makeText(MainActivity.this, "画像ブロック有効", Toast.LENGTH_SHORT).show();
+        reloadTabsForSettings();
     }
 
     private void disableimgunlock() {
-        BrowserView webView = getCurrentWebView();
-        webView.getSettings().setLoadsImagesAutomatically(defaultLoadsImagesAutomatically);
-        webView.clearCache(true);
-        webView.reload();
+        for (BrowserView v : new ArrayList<>(webViews)) {
+            v.getSettings().setLoadsImagesAutomatically(defaultLoadsImagesAutomatically);
+        }
         Toast.makeText(MainActivity.this, "画像ブロック無効", Toast.LENGTH_SHORT).show();
+        reloadTabsForSettings();
     }
+
     private void showFindInPageBar() {
     if (findInPageBarView == null) {
         LayoutInflater inflater = LayoutInflater.from(this);
@@ -4263,11 +4199,15 @@ private void showHistoryDialog() {
             String url = obj.optString("url", "");
             if (!url.isEmpty()) {
                 bookmarks.add(new Bookmark(title, url));
-                backgroundExecutor.execute(() -> {
-                    Bitmap favicon = fetchFavicon(url);
+                faviconExecutor.execute(() -> {
+                    String key = faviconKey(url);
+                    if (key == null || faviconCache.get(key) != null || readFaviconFromDisk(key, url) != null) {
+                        return;
+                    }
+                    Bitmap favicon = normalizeFavicon(fetchFavicon(url));
                     if (favicon != null) {
-                        runOnUiThread(() -> faviconCache.put(url, favicon));
-                        saveFaviconToFile(url, favicon);
+                        faviconCache.put(key, favicon);
+                        saveFaviconToFile(key, favicon);
                     }
                 });
             }
@@ -4420,70 +4360,202 @@ private void addHistory(String url, String title) {
         Toast.makeText(MainActivity.this, "リンクをコピーしました", Toast.LENGTH_SHORT).show();
     }
 
-    private Bitmap fetchFavicon(String bookmarkUrl) {
-        try {
-            URL urlObj = new URL(bookmarkUrl);
-            String protocol = urlObj.getProtocol();
-            String host = urlObj.getHost();
-            String faviconUrl = protocol + "://" + host + "/favicon.ico";
-            HttpURLConnection connection = (HttpURLConnection) new URL(faviconUrl).openConnection();
-            connection.setConnectTimeout(3000);
-            connection.setReadTimeout(3000);
-            connection.setRequestMethod("GET");
-            connection.connect();
-            if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
-                try (InputStream is = connection.getInputStream()) {
-                    return BitmapFactory.decodeStream(is);
-                }
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
+                        private static String faviconKey(String url) {
+        if (url == null) {
+            return null;
         }
-        return null;
+        try {
+            String host = Uri.parse(url).getHost();
+            if (host == null || host.isEmpty()) {
+                return null;
+            }
+            host = host.toLowerCase(Locale.ROOT);
+            return host.startsWith("www.") ? host.substring(4) : host;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
-    private String getFaviconFilename(String url) {
+    private static String md5Name(String text) {
         try {
             MessageDigest digest = MessageDigest.getInstance("MD5");
-            byte[] hash = digest.digest(url.getBytes("UTF-8"));
+            byte[] hash = digest.digest(text.getBytes("UTF-8"));
             final char[] hex = "0123456789abcdef".toCharArray();
             StringBuilder sb = new StringBuilder(36);
             for (byte b : hash) {
                 sb.append(hex[(b >> 4) & 0x0f]).append(hex[b & 0x0f]);
             }
-            return sb.toString() + ".png";
+            return sb.append(".png").toString();
         } catch (Exception e) {
-            return Integer.toString(url.hashCode()) + ".png";
+            return Integer.toString(text.hashCode()) + ".png";
         }
     }
-    private void saveFaviconToFile(String url, Bitmap bitmap) {
-        File faviconsDir = new File(getFilesDir(), "favicons");
-        if (!faviconsDir.exists()) {
-            faviconsDir.mkdirs();
+
+    private String getFaviconFilename(String key) {
+        return md5Name("h:" + key);
+    }
+
+    private Bitmap normalizeFavicon(Bitmap src) {
+        if (src == null || src.isRecycled()) {
+            return null;
         }
-        File file = new File(faviconsDir, getFaviconFilename(url));
-        try (FileOutputStream fos = new FileOutputStream(file)) {
-            bitmap.compress(Bitmap.CompressFormat.PNG, 50, fos);
+        int max = 96;
+        int w = src.getWidth();
+        int h = src.getHeight();
+        if (w <= 0 || h <= 0) {
+            return null;
+        }
+        if (w <= max && h <= max) {
+            return src;
+        }
+        float scale = Math.min((float) max / w, (float) max / h);
+        return Bitmap.createScaledBitmap(src, Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale)), true);
+    }
+
+    private void storeFavicon(String url, Bitmap icon) {
+        final String key = faviconKey(url);
+        if (key == null || icon == null) {
+            return;
+        }
+        final Bitmap bitmap = normalizeFavicon(icon);
+        if (bitmap == null) {
+            return;
+        }
+        Bitmap previous = faviconCache.get(key);
+        if (previous != null && (previous == bitmap || previous.sameAs(bitmap))) {
+            return;
+        }
+        faviconCache.put(key, bitmap);
+        faviconMissing.remove(key);
+        faviconExecutor.execute(() -> saveFaviconToFile(key, bitmap));
+    }
+
+    private void saveFaviconToFile(String key, Bitmap bitmap) {
+        File dir = new File(getFilesDir(), "favicons");
+        if (!dir.exists() && !dir.mkdirs() && !dir.exists()) {
+            return;
+        }
+        File file = new File(dir, getFaviconFilename(key));
+        File tmp = new File(dir, file.getName() + ".tmp");
+        try (FileOutputStream fos = new FileOutputStream(tmp)) {
+            bitmap.compress(Bitmap.CompressFormat.PNG, 90, fos);
+            fos.flush();
         } catch (IOException e) {
-            e.printStackTrace();
+            safeDeleteFile(tmp);
+            return;
         }
-    }
-    private void loadFaviconFromDisk(String url) {
-        File faviconsDir = new File(getFilesDir(), "favicons");
-        File file = new File(faviconsDir, getFaviconFilename(url));
-        if (file.exists()) {
-            Bitmap bitmap = BitmapFactory.decodeFile(file.getAbsolutePath());
-            if (bitmap != null) {
-                faviconCache.put(url, bitmap);
+        if (!tmp.renameTo(file)) {
+            safeDeleteFile(file);
+            if (!tmp.renameTo(file)) {
+                safeDeleteFile(tmp);
             }
         }
     }
-    private Bitmap getFaviconBitmap(String url) {
-        if (url == null) return null;
-        Bitmap cached = faviconCache.get(url);
-        if (cached != null) return cached;
-        loadFaviconFromDisk(url);
-        return faviconCache.get(url);
+
+    private Bitmap readFaviconFromDisk(String key, String url) {
+        File dir = new File(getFilesDir(), "favicons");
+        File file = new File(dir, getFaviconFilename(key));
+        if (!file.exists() && url != null) {
+            file = new File(dir, md5Name(url));
+        }
+        if (!file.exists()) {
+            return null;
+        }
+        return BitmapFactory.decodeFile(file.getAbsolutePath());
+    }
+
+    private Bitmap fetchFavicon(String pageUrl) {
+        try {
+            URL base = new URL(pageUrl);
+            String target = base.getProtocol() + "://" + base.getHost() + (base.getPort() > 0 ? ":" + base.getPort() : "") + "/favicon.ico";
+            for (int hop = 0; hop < 4; hop++) {
+                HttpURLConnection connection = (HttpURLConnection) new URL(target).openConnection();
+                connection.setConnectTimeout(3000);
+                connection.setReadTimeout(3000);
+                connection.setInstanceFollowRedirects(false);
+                int code = connection.getResponseCode();
+                if (code >= 300 && code < 400) {
+                    String location = connection.getHeaderField("Location");
+                    connection.disconnect();
+                    if (location == null) {
+                        return null;
+                    }
+                    target = new URL(new URL(target), location).toString();
+                    continue;
+                }
+                if (code == HttpURLConnection.HTTP_OK) {
+                    try (InputStream is = connection.getInputStream()) {
+                        return BitmapFactory.decodeStream(is);
+                    } finally {
+                        connection.disconnect();
+                    }
+                }
+                connection.disconnect();
+                return null;
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private void showCachedFavicon(String url) {
+        if (faviconImageView == null || urlEditMode || url == null || url.equals(START_PAGE)) {
+            return;
+        }
+        String key = faviconKey(url);
+        if (key == null) {
+            return;
+        }
+        Bitmap cached = faviconCache.get(key);
+        if (cached != null) {
+            faviconImageView.setImageBitmap(cached);
+        } else {
+            bindFavicon(faviconImageView, url);
+        }
+    }
+
+    private void bindFavicon(final ImageView target, final String url) {
+        final String key = faviconKey(url);
+        target.setTag(key);
+        if (key == null) {
+            target.setImageResource(R.drawable.transparent_vector);
+            return;
+        }
+        Bitmap cached = faviconCache.get(key);
+        if (cached != null) {
+            target.setImageBitmap(cached);
+            return;
+        }
+        target.setImageResource(R.drawable.transparent_vector);
+        if (!faviconLoading.add(key)) {
+            return;
+        }
+        faviconExecutor.execute(() -> {
+            Bitmap loaded = null;
+            try {
+                loaded = readFaviconFromDisk(key, url);
+                if (loaded == null && !faviconMissing.contains(key)) {
+                    loaded = normalizeFavicon(fetchFavicon(url));
+                    if (loaded != null) {
+                        saveFaviconToFile(key, loaded);
+                    } else {
+                        faviconMissing.add(key);
+                    }
+                }
+            } finally {
+                faviconLoading.remove(key);
+            }
+            final Bitmap result = loaded;
+            if (result == null) {
+                return;
+            }
+            runOnUiThread(() -> {
+                faviconCache.put(key, result);
+                if (key.equals(target.getTag())) {
+                    target.setImageBitmap(result);
+                }
+            });
+        });
     }
 
     private static final class HistoryRow {
@@ -4567,12 +4639,7 @@ private class HistoryAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         HistoryViewHolder historyHolder = (HistoryViewHolder) holder;
         historyHolder.title.setText((item.getTitle() != null && !item.getTitle().isEmpty()) ? item.getTitle() : item.getUrl());
         historyHolder.url.setText(item.getUrl());
-        Bitmap icon = getFaviconBitmap(item.getUrl());
-        if (icon != null) {
-            historyHolder.favicon.setImageBitmap(icon);
-        } else {
-            historyHolder.favicon.setImageResource(R.drawable.transparent_vector);
-        }
+        bindFavicon(historyHolder.favicon, item.getUrl());
         historyHolder.itemView.setOnClickListener(v -> {
             getCurrentWebView().loadUrl(item.getUrl());
             dialog.dismiss();
@@ -4647,12 +4714,7 @@ private class HistoryAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             Bookmark bm = items.get(position);
             holder.title.setText(bm.getTitle());
             holder.url.setText(bm.getUrl());
-            Bitmap icon = getFaviconBitmap(bm.getUrl());
-            if (icon != null) {
-                holder.favicon.setImageBitmap(icon);
-            } else {
-                holder.favicon.setImageResource(R.drawable.transparent_vector);
-            }
+            bindFavicon(holder.favicon, bm.getUrl());
             holder.itemView.setOnClickListener(v -> {
                 getCurrentWebView().loadUrl(bm.getUrl());
                 dialog.dismiss();
