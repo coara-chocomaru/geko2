@@ -101,6 +101,7 @@ public final class BrowserEngine {
                 .crashPullNeverShowAgain(true)
                 .build();
         runtime = GeckoRuntime.create(appContext, settings);
+        clearLegacyColorSchemePrefs();
         executor = new GeckoWebExecutor(runtime);
         defaultUserAgent = GeckoSession.getDefaultUserAgent();
         installCore();
@@ -188,10 +189,15 @@ public final class BrowserEngine {
         return defaultUserAgent == null ? "" : defaultUserAgent;
     }
 
-    public void setDarkMode(boolean enabled) {
-        if (darkMode == enabled) {
-            return;
+    private void clearLegacyColorSchemePrefs() {
+        try {
+            GeckoPreferenceController.clearGeckoUserPref("layout.css.prefers-color-scheme.content-override");
+            GeckoPreferenceController.clearGeckoUserPref("ui.systemUsesDarkTheme");
+        } catch (Throwable ignored) {
         }
+    }
+
+    public void setDarkMode(boolean enabled) {
         darkMode = enabled;
         if (runtime != null) {
             runtime.getSettings().setPreferredColorScheme(enabled

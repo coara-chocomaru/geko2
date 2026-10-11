@@ -12,6 +12,7 @@ import android.view.InputDevice;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.View;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -661,6 +662,10 @@ public class BrowserView extends GeckoView {
         if (session != null) {
             session.getPanZoomController().scrollToTop();
         }
+    }
+
+    public boolean isCaptureReady() {
+        return session != null && !paused && !destroyed && isShown() && getWindowVisibility() == View.VISIBLE;
     }
 
     public void capture(final ValueCallback<Bitmap> callback) {
