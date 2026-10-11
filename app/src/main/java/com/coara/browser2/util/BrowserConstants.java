@@ -14,7 +14,6 @@ public final class BrowserConstants {
     public static final String KEY_IMG_BLOCK_ENABLED = "img_block_enabled";
     public static final String KEY_UA_ENABLED = "ua_enabled";
     public static final String KEY_DESKUA_ENABLED = "deskua_enabled";
-    public static final String KEY_CT3UA_ENABLED = "ct3ua_enabled";
     public static final String KEY_TABS = "tabs";
     public static final String KEY_CURRENT_TAB = "current_tab_index";
     public static final String KEY_BOOKMARKS = "bookmarks";
@@ -26,7 +25,6 @@ public final class BrowserConstants {
     public static final String APP_ASSET_BASE_URL = "https://assets.coara.invalid/assets/";
     public static final String APP_ASSET_START_PAGE = APP_ASSET_BASE_URL + "index.html";
     public static final String APP_ASSET_SECRET_PAGE = APP_ASSET_BASE_URL + "secret.html";
-    public static final String APP_ASSET_EXEC_PAGE = APP_ASSET_BASE_URL + "exec.html";
     public static final String START_PAGE = APP_ASSET_START_PAGE;
     public static final int FILE_SELECT_CODE = 1001;
     public static final int MAX_TABS = 30;

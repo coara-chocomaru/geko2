@@ -11,8 +11,22 @@ import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class TabHistoryStore {
+    private static final Set<Integer> DEAD = ConcurrentHashMap.newKeySet();
+
+    public static boolean isDead(int id) {
+        return DEAD.contains(id);
+    }
+
+    public static void markDead(int id) {
+        if (id >= 0) {
+            DEAD.add(id);
+        }
+    }
+
     public static final class Entry {
         private final String url;
         private final String title;
@@ -233,7 +247,7 @@ public final class TabHistoryStore {
     }
 
     public synchronized void save(int id, State state) {
-        if (dir == null || id < 0 || state == null) {
+        if (dir == null || id < 0 || state == null || DEAD.contains(id)) {
             return;
         }
         try {
@@ -264,6 +278,9 @@ public final class TabHistoryStore {
     }
 
     public synchronized void delete(int id) {
+        if (id >= 0) {
+            DEAD.add(id);
+        }
         if (dir == null || id < 0) {
             return;
         }

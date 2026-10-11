@@ -256,6 +256,7 @@ public final class BrowserVisualSettings {
             }
 
             try {
+                webView.setTransparentSurface(transparency);
                 webView.setBackgroundColorValue(transparency ? Color.TRANSPARENT : Color.WHITE);
             } catch (Exception ignored) {
             }
