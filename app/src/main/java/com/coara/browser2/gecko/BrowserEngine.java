@@ -92,15 +92,15 @@ public final class BrowserEngine {
                 .inputAutoZoomEnabled(false)
                 .forceUserScalableEnabled(false)
                 .webManifest(false)
-                .preferredColorScheme(darkMode
-                        ? GeckoRuntimeSettings.COLOR_SCHEME_DARK
-                        : GeckoRuntimeSettings.COLOR_SCHEME_LIGHT)
                 .fissionEnabled(false)
                 .loginAutofillEnabled(false)
                 .translationsOfferPopup(false)
                 .crashPullNeverShowAgain(true)
                 .build();
         runtime = GeckoRuntime.create(appContext, settings);
+        runtime.getSettings().setPreferredColorScheme(darkMode
+                ? GeckoRuntimeSettings.COLOR_SCHEME_DARK
+                : GeckoRuntimeSettings.COLOR_SCHEME_LIGHT);
         clearLegacyColorSchemePrefs();
         executor = new GeckoWebExecutor(runtime);
         defaultUserAgent = GeckoSession.getDefaultUserAgent();

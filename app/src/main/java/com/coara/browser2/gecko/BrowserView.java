@@ -105,7 +105,6 @@ public class BrowserView extends GeckoView {
         private String pendingUrl;
     private Map<String, String> pendingHeaders;
     private Object extraTag;
-    private int viewBackend = BACKEND_SURFACE_VIEW;
 
     private volatile int inputBehaviorMode = PAGE_MODE_NORMAL;
     private volatile int keyboardMode = CHAR_MODE_NORMAL;
@@ -602,27 +601,6 @@ public class BrowserView extends GeckoView {
     }
 
     public void resumeTimers() {
-    }
-
-    public void setTransparentSurface(boolean on) {
-        int backend = on ? BACKEND_TEXTURE_VIEW : BACKEND_SURFACE_VIEW;
-        if (backend == viewBackend) {
-            return;
-        }
-        viewBackend = backend;
-        try {
-            GeckoSession attached = getSession();
-            if (attached != null) {
-                releaseSession();
-                setViewBackend(backend);
-                setSession(attached);
-                attached.getCompositorController().setClearColor(clearColor);
-                attached.setActive(!paused);
-            } else {
-                setViewBackend(backend);
-            }
-        } catch (Throwable ignored) {
-        }
     }
 
     public void setBackgroundColorValue(int color) {
