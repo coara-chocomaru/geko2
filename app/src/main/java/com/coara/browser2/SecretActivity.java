@@ -868,7 +868,7 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     private BrowserView createNewWebView() {
         final BrowserView webView = new BrowserView(this, true);
         KeyboardSettings.configureWebView(webView, pref);
-        webView.setBackgroundColorValue(Color.WHITE);
+        webView.setBackgroundColorValue(darkModeEnabled ? 0xFF2A2A2E : Color.WHITE);
         webView.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 

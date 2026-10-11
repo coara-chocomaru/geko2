@@ -95,6 +95,7 @@ import com.coara.browser2.plugin.PluginHost;
 import com.coara.browser2.plugin.PluginManagerActivity;
 import com.coara.browser2.plugin.PluginManager;
 import com.coara.browser2.plugin.PluginRuntime;
+import com.coara.browser2.util.BackgroundWallpaper;
 import com.coara.browser2.util.BrowserVisualSettings;
 import com.coara.browser2.util.BrowserMenuController;
 import com.coara.browser2.util.BrowserThemeManager;
@@ -189,7 +190,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private TextView tabCountTextView;
     private ImageView copyButton;
     private ImageView backgroundImageView;
-    private Bitmap backgroundBitmap;
     private volatile int backgroundLoadToken = 0;
     private ActivityResultLauncher<Intent> fileChooserLauncher;
     private ActivityResultLauncher<String> backgroundImageLauncher;
@@ -890,7 +890,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             schedulePluginReload();
         }
         applyBrowserThemeToAllWebViews();
-        if (backgroundImageView != null && backgroundBitmap == null && BrowserVisualSettings.getBackgroundPath(pref) != null) {
+        if (!BackgroundWallpaper.isReady() && BrowserVisualSettings.getBackgroundPath(pref) != null && BrowserVisualSettings.isTransparencyEnabled(pref)) {
             loadBackgroundImage();
         }
         TouchpadOverlayController.onHostResume(this, pref);
@@ -1192,7 +1192,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         }
         if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
             clearTabSnapshots();
-            clearBackgroundBitmap();
         }
     }
 
@@ -1543,7 +1542,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private BrowserView createNewWebView() {
         final BrowserView webView = new BrowserView(this);
         KeyboardSettings.configureWebView(webView, pref);
-        webView.setBackgroundColorValue(Color.WHITE);
+        webView.setBackgroundColorValue(darkModeEnabled ? 0xFF2A2A2E : Color.WHITE);
         webView.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -2257,20 +2256,14 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     }
 
     private void updateBackgroundImageVisibility() {
-        if (backgroundImageView == null || pref == null) {
-            return;
+        if (backgroundImageView != null) {
+            backgroundImageView.setImageDrawable(null);
+            backgroundImageView.setVisibility(View.GONE);
         }
-        String path = BrowserVisualSettings.getBackgroundPath(pref);
-        boolean visible = BrowserVisualSettings.isTransparencyEnabled(pref)
-                && path != null
-                && new File(path).exists()
-                && backgroundBitmap != null
-                && !backgroundBitmap.isRecycled();
-        backgroundImageView.setVisibility(visible ? View.VISIBLE : View.GONE);
     }
 
     private void saveSelectedBackgroundImage(Uri uri) {
-        if (uri == null || backgroundImageView == null) {
+        if (uri == null) {
             return;
         }
         final File target = new File(getFilesDir(), "background_image");
@@ -2322,10 +2315,8 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     throw new IOException("background replace failed");
                 }
 
-                int targetWidth = Math.max(1, getResources().getDisplayMetrics().widthPixels);
-                int targetHeight = Math.max(1, getResources().getDisplayMetrics().heightPixels);
-                Bitmap decoded = decodeBackgroundBitmap(target, targetWidth, targetHeight);
-                if (decoded == null) {
+                boolean decoded = BackgroundWallpaper.load(target);
+                if (!decoded) {
                     target.delete();
                     if (hadOld && backup.exists()) {
                         backup.renameTo(target);
@@ -2335,17 +2326,10 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
                 runOnUiThread(() -> {
                     if (operationToken != backgroundLoadToken || isFinishing() || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed())) {
-                        if (!decoded.isRecycled()) {
-                            decoded.recycle();
-                        }
                         return;
                     }
                     BrowserVisualSettings.setBackgroundPath(pref, target.getAbsolutePath());
-                    clearBackgroundBitmap();
-                    backgroundBitmap = decoded;
-                    backgroundImageView.setImageBitmap(decoded);
-                    backgroundImageView.setScaleType(ImageView.ScaleType.CENTER_CROP);
-                    updateBackgroundImageVisibility();
+                    applyBrowserVisualSettingsToAllWebViews();
                     if (backup.exists()) {
                         backup.delete();
                     }
@@ -2370,14 +2354,14 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     }
 
     private void loadBackgroundImage() {
-        if (backgroundImageView == null || pref == null) {
+        if (pref == null) {
             return;
         }
         final String path = BrowserVisualSettings.getBackgroundPath(pref);
         final int operationToken = ++backgroundLoadToken;
         if (path == null) {
             clearBackgroundBitmap();
-            updateBackgroundImageVisibility();
+            applyBrowserVisualSettingsToAllWebViews();
             return;
         }
 
@@ -2394,88 +2378,26 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             BrowserVisualSettings.setBackgroundTransparencyPercent(pref, 0);
             clearBackgroundBitmap();
             applyBrowserVisualSettingsToAllWebViews();
-            updateBackgroundImageVisibility();
             return;
         }
 
-        int targetWidth = Math.max(1, backgroundImageView.getWidth());
-        int targetHeight = Math.max(1, backgroundImageView.getHeight());
-        if (targetWidth <= 1) {
-            targetWidth = Math.max(1, getResources().getDisplayMetrics().widthPixels);
-        }
-        if (targetHeight <= 1) {
-            targetHeight = Math.max(1, getResources().getDisplayMetrics().heightPixels);
-        }
-
         final File resolvedFile = file;
-        final int finalTargetWidth = targetWidth;
-        final int finalTargetHeight = targetHeight;
         backgroundExecutor.execute(() -> {
-            Bitmap decoded = null;
-            try {
-                decoded = decodeBackgroundBitmap(resolvedFile, finalTargetWidth, finalTargetHeight);
-                if (decoded == null) {
-                    throw new IOException("background decode failed");
+            final boolean ok = BackgroundWallpaper.load(resolvedFile);
+            runOnUiThread(() -> {
+                if (operationToken != backgroundLoadToken || isFinishing()
+                        || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed())) {
+                    return;
                 }
-                Bitmap result = decoded;
-                runOnUiThread(() -> {
-                    if (operationToken != backgroundLoadToken || isFinishing()
-                            || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed())) {
-                        if (!result.isRecycled()) {
-                            result.recycle();
-                        }
-                        return;
-                    }
-                    clearBackgroundBitmap();
-                    backgroundBitmap = result;
-                    backgroundImageView.setImageBitmap(result);
-                    backgroundImageView.setScaleType(ImageView.ScaleType.CENTER_CROP);
-                    updateBackgroundImageVisibility();
-                });
-            } catch (Exception e) {
-                if (decoded != null && !decoded.isRecycled()) {
-                    decoded.recycle();
+                if (!ok) {
+                    BackgroundWallpaper.clear();
                 }
-                runOnUiThread(() -> {
-                    if (operationToken == backgroundLoadToken && !isFinishing()
-                            && (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR1 || !isDestroyed())) {
-                        updateBackgroundImageVisibility();
-                    }
-                });
-            }
+                applyBrowserVisualSettingsToAllWebViews();
+            });
         });
     }
 
-    private Bitmap decodeBackgroundBitmap(File file, int targetWidth, int targetHeight) {
-        try {
-            BitmapFactory.Options bounds = new BitmapFactory.Options();
-            bounds.inJustDecodeBounds = true;
-            BitmapFactory.decodeFile(file.getAbsolutePath(), bounds);
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-                return null;
-            }
 
-            int sample = 1;
-            while ((bounds.outWidth / sample) > targetWidth * 2
-                    || (bounds.outHeight / sample) > targetHeight * 2) {
-                sample <<= 1;
-                if (sample >= 512) {
-                    break;
-                }
-            }
-
-            BitmapFactory.Options options = new BitmapFactory.Options();
-            options.inSampleSize = Math.max(1, sample);
-            options.inPreferredConfig = Bitmap.Config.ARGB_8888;
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
-                options.inPurgeable = true;
-                options.inInputShareable = true;
-            }
-            return BitmapFactory.decodeFile(file.getAbsolutePath(), options);
-        } catch (Exception e) {
-            return null;
-        }
-    }
 
     private void clearBackgroundImage() {
         ++backgroundLoadToken;
@@ -2496,16 +2418,8 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
     private void clearBackgroundBitmap() {
         ++backgroundLoadToken;
-        if (backgroundImageView != null) {
-            backgroundImageView.setImageDrawable(null);
-        }
-        if (backgroundBitmap != null && !backgroundBitmap.isRecycled()) {
-            try {
-                backgroundBitmap.recycle();
-            } catch (Exception ignored) {
-            }
-        }
-        backgroundBitmap = null;
+        BackgroundWallpaper.clear();
+        updateBackgroundImageVisibility();
     }
 
     private void showLaunchProtectionDialog() {
@@ -3699,6 +3613,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
     private void updateDarkMode() {
         BrowserEngine.get().setDarkMode(darkModeEnabled);
+        applyBrowserVisualSettingsToAllWebViews();
         reloadTabsForSettings();
     }
 
