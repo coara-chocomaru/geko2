@@ -3,6 +3,12 @@
     var APP = "coaraBg";
     var port = null;
     var registered = { plugins: [], css: {} };
+    var queue = Promise.resolve();
+
+    function enqueue(job) {
+        queue = queue.then(job, job);
+        return queue;
+    }
 
     function connect() {
         if (port) {
@@ -46,7 +52,13 @@
         }));
     }
 
-    function registerPlugins(list) {
+    function registerPlugins(list, seq) {
+        return enqueue(function () {
+            return doRegisterPlugins(list, seq);
+        });
+    }
+
+    function doRegisterPlugins(list, seq) {
         var previous = registered.plugins;
         registered.plugins = [];
         return unregisterAll(previous).then(function () {
@@ -69,12 +81,19 @@
                 })(list[i]);
             }
             return Promise.all(jobs);
+        }).catch(function () {
         }).then(function () {
-            send({ t: "plugins.done", n: registered.plugins.length });
+            send({ t: "plugins.done", n: registered.plugins.length, seq: seq });
         });
     }
 
     function registerCss(key, css) {
+        return enqueue(function () {
+            return doRegisterCss(key, css);
+        });
+    }
+
+    function doRegisterCss(key, css) {
         var previous = registered.css[key];
         delete registered.css[key];
         var chain = previous ? unregisterAll([previous]) : Promise.resolve();
@@ -182,7 +201,7 @@
         }
         switch (m.t) {
             case "plugins":
-                registerPlugins(m.list || []);
+                registerPlugins(m.list || [], m.seq);
                 break;
             case "css":
                 registerCss(String(m.key), m.css);

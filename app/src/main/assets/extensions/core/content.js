@@ -14,8 +14,6 @@
     var port = null;
     var outbox = [];
     var styles = {};
-    var darkWanted = false;
-    var darkApplied = false;
     var iconSent = "";
 
     function connect() {
@@ -144,66 +142,6 @@
         styles[key] = entry;
     }
 
-    function luminance(color) {
-        var m = /rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+))?/.exec(color || "");
-        if (!m) {
-            return -1;
-        }
-        var a = m[4] === undefined ? 1 : parseFloat(m[4]);
-        if (a < 0.05) {
-            return -1;
-        }
-        return (0.2126 * parseInt(m[1], 10) + 0.7152 * parseInt(m[2], 10) + 0.0722 * parseInt(m[3], 10)) / 255;
-    }
-
-    function pageIsLight() {
-        try {
-            var meta = document.querySelector("meta[name=color-scheme]");
-            if (meta && /dark/i.test(meta.getAttribute("content") || "")) {
-                return false;
-            }
-            var targets = [document.body, document.documentElement];
-            for (var i = 0; i < targets.length; i++) {
-                if (!targets[i]) {
-                    continue;
-                }
-                var l = luminance(getComputedStyle(targets[i]).backgroundColor);
-                if (l >= 0) {
-                    return l > 0.55;
-                }
-            }
-            return true;
-        } catch (e) {
-            return true;
-        }
-    }
-
-    function evalDark() {
-        if (!darkWanted) {
-            if (darkApplied) {
-                removeCss("__dark");
-                darkApplied = false;
-            }
-            return;
-        }
-        if (!isTop) {
-            return;
-        }
-        var light = pageIsLight();
-        if (light && !darkApplied) {
-            setCss("__dark", "html{filter:invert(1) hue-rotate(180deg)!important;background:#fff!important;}img,picture,video,canvas,svg image,iframe{filter:invert(1) hue-rotate(180deg)!important;}");
-            darkApplied = true;
-        } else if (!light && darkApplied) {
-            removeCss("__dark");
-            darkApplied = false;
-        }
-    }
-
-    function setDark(on) {
-        darkWanted = on;
-        evalDark();
-    }
-
     function sendIcon() {
         if (!isTop) {
             return;
@@ -271,9 +209,6 @@
             case "cssoff":
                 removeCss(String(m.key));
                 break;
-            case "dark":
-                setDark(!!m.on);
-                break;
             case "ping":
                 send({ t: "pong" });
                 break;
@@ -298,26 +233,14 @@
     }
     G.AndroidBridge = bridge;
 
-    if (location.protocol === "moz-extension:") {
-        G.Android = {
-            executeCommand: function (command) {
-                send({ t: "call", fn: "executeCommand", a: [String(command)] });
-            },
-            stopCommand: function () {
-                send({ t: "call", fn: "stopCommand", a: [] });
-            }
-        };
-    }
 
     send({ t: "hello", top: isTop, url: String(location.href) });
 
     document.addEventListener("DOMContentLoaded", function () {
         sendIcon();
         watchIcons();
-        evalDark();
     }, { once: true });
     G.addEventListener("load", function () {
         sendIcon();
-        evalDark();
     }, { once: true });
 })();
