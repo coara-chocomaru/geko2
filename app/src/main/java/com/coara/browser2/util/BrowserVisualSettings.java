@@ -240,7 +240,13 @@ public final class BrowserVisualSettings {
         boolean transparency = isTransparencyEnabled(preferences);
         int transparencyPercent = getBackgroundTransparencyPercent(preferences);
         boolean preRaster = isOffscreenPreRasterEnabled(preferences);
-        String signature = fontFamily + "|" + transparency + "|" + preRaster;
+        boolean dark = false;
+        try {
+            dark = com.coara.browser2.gecko.BrowserEngine.get().isDarkMode();
+        } catch (Exception ignored) {
+        }
+        boolean wallpaper = transparency && BackgroundWallpaper.isReady();
+        String signature = fontFamily + "|" + transparency + "|" + preRaster + "|" + dark + "|" + BackgroundWallpaper.getStamp();
         boolean unchanged;
         synchronized (APPLIED_SIGNATURES) {
             unchanged = signature.equals(APPLIED_SIGNATURES.get(webView));
@@ -256,8 +262,9 @@ public final class BrowserVisualSettings {
             }
 
             try {
-                webView.setTransparentSurface(transparency);
-                webView.setBackgroundColorValue(transparency ? Color.TRANSPARENT : Color.WHITE);
+                webView.setBackgroundColorValue(wallpaper
+                        ? BackgroundWallpaper.getAverageColor()
+                        : (dark ? 0xFF2A2A2E : Color.WHITE));
             } catch (Exception ignored) {
             }
         }
@@ -283,7 +290,7 @@ public final class BrowserVisualSettings {
 
     private static void injectStyle(BrowserView webView, String textColor, String fontFamily, boolean transparency, int transparencyPercent) {
         try {
-            String cssKey = textColor + "|" + fontFamily + "|" + transparency + "|" + transparencyPercent;
+            String cssKey = textColor + "|" + fontFamily + "|" + transparency + "|" + transparencyPercent + "|" + BackgroundWallpaper.getStamp();
             if (!cssKey.equals(cachedCssKey) || cachedScript == null) {
                 StringBuilder css = new StringBuilder();
                 if (!DEFAULT.equals(textColor)) {
@@ -298,6 +305,12 @@ public final class BrowserVisualSettings {
                 }
                 if (transparency) {
                     css.append(buildTransparencyCss(transparencyPercent));
+                    String wallpaperUri = BackgroundWallpaper.getDataUri();
+                    if (wallpaperUri != null) {
+                        css.append("html:root{background-color:transparent !important;background-image:url(\"")
+                                .append(wallpaperUri)
+                                .append("\") !important;background-size:cover !important;background-position:center center !important;background-repeat:no-repeat !important;background-attachment:fixed !important;}");
+                    }
                 }
                 cachedCssKey = cssKey;
                 cachedScript = css.toString();
