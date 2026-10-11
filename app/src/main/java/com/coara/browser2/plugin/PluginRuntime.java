@@ -227,6 +227,12 @@ public final class PluginRuntime {
         pushRegistrations(false);
     }
 
+    public static void applyRegistrationsThen(Runnable afterApplied) {
+        MAIN.removeCallbacks(REPUSH);
+        pushRegistrations(true);
+        BrowserEngine.get().getAgent().afterPluginsApplied(afterApplied, 2500L);
+    }
+
     private static void scheduleRepush() {
         MAIN.removeCallbacks(REPUSH);
         MAIN.postDelayed(REPUSH, REPUSH_DELAY_MS);
