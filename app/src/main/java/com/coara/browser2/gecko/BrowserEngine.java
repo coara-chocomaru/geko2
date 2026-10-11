@@ -45,6 +45,7 @@ public final class BrowserEngine {
     private boolean darkMode;
     private boolean imagesEnabled = true;
     private boolean zoomEnabled;
+    private int desktopViewportWidth = -1;
 
     private BrowserEngine(Context context) {
         this.appContext = context.getApplicationContext();
@@ -100,7 +101,6 @@ public final class BrowserEngine {
                 .crashPullNeverShowAgain(true)
                 .build();
         runtime = GeckoRuntime.create(appContext, settings);
-        applyColorSchemePrefs(darkMode);
         executor = new GeckoWebExecutor(runtime);
         defaultUserAgent = GeckoSession.getDefaultUserAgent();
         installCore();
@@ -188,25 +188,37 @@ public final class BrowserEngine {
         return defaultUserAgent == null ? "" : defaultUserAgent;
     }
 
-    private void applyColorSchemePrefs(boolean dark) {
-        try {
-            GeckoPreferenceController.setGeckoPref("layout.css.prefers-color-scheme.content-override",
-                    dark ? 0 : 1, GeckoPreferenceController.PREF_BRANCH_USER);
-            GeckoPreferenceController.setGeckoPref("ui.systemUsesDarkTheme",
-                    dark ? 1 : 0, GeckoPreferenceController.PREF_BRANCH_USER);
-        } catch (Throwable ignored) {
-        }
-    }
-
     public void setDarkMode(boolean enabled) {
+        if (darkMode == enabled) {
+            return;
+        }
         darkMode = enabled;
         if (runtime != null) {
             runtime.getSettings().setPreferredColorScheme(enabled
                     ? GeckoRuntimeSettings.COLOR_SCHEME_DARK
                     : GeckoRuntimeSettings.COLOR_SCHEME_LIGHT);
-            applyColorSchemePrefs(enabled);
         }
-        agent.broadcastDarkMode(enabled);
+    }
+
+    public void updateDesktopViewport(Context context) {
+        android.util.DisplayMetrics dm = context.getResources().getDisplayMetrics();
+        float density = dm.density > 0f ? dm.density : 1f;
+        float widthDp = dm.widthPixels / density;
+        int target;
+        if (widthDp < 600f) {
+            target = Math.max(820, Math.round(widthDp * 2f));
+        } else {
+            target = Math.min(1440, Math.max(1024, Math.round(widthDp * 1.3f)));
+        }
+        if (target == desktopViewportWidth) {
+            return;
+        }
+        desktopViewportWidth = target;
+        try {
+            GeckoPreferenceController.setGeckoPref("browser.viewport.desktopWidth", target,
+                    GeckoPreferenceController.PREF_BRANCH_USER);
+        } catch (Throwable ignored) {
+        }
     }
 
     public boolean isDarkMode() {

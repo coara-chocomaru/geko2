@@ -104,6 +104,7 @@ public class BrowserView extends GeckoView {
         private String pendingUrl;
     private Map<String, String> pendingHeaders;
     private Object extraTag;
+    private int viewBackend = BACKEND_SURFACE_VIEW;
 
     private volatile int inputBehaviorMode = PAGE_MODE_NORMAL;
     private volatile int keyboardMode = CHAR_MODE_NORMAL;
@@ -424,6 +425,19 @@ public class BrowserView extends GeckoView {
                 ? GeckoSession.LOAD_FLAGS_BYPASS_CACHE : GeckoSession.LOAD_FLAGS_NONE);
     }
 
+    public void reloadForSettings() {
+        if (session == null) {
+            return;
+        }
+        String actual = url;
+        String failed = actual != null ? ErrorPages.failedUrlFor(actual) : null;
+        if (failed != null) {
+            loadUrl(failed);
+            return;
+        }
+        session.reload(GeckoSession.LOAD_FLAGS_BYPASS_CACHE);
+    }
+
     public void stopLoading() {
         if (session != null) {
             session.stop();
@@ -511,6 +525,35 @@ public class BrowserView extends GeckoView {
         }
     }
 
+    public interface StateSource {
+        Bundle toBundle();
+    }
+
+    public StateSource captureStateSource() {
+        if (session != null) {
+            try {
+                session.flushSessionState();
+            } catch (Throwable ignored) {
+            }
+        }
+        final GeckoSession.SessionState captured = sessionState;
+        final String capturedUrl = sessionStateUrl;
+        if (captured == null) {
+            return null;
+        }
+        return new StateSource() {
+            @Override
+            public Bundle toBundle() {
+                Bundle out = new Bundle();
+                out.putString(STATE_KEY, captured.toString());
+                if (capturedUrl != null) {
+                    out.putString(STATE_URL_KEY, capturedUrl);
+                }
+                return out;
+            }
+        };
+    }
+
     public boolean restoreState(Bundle in) {
         if (in == null) {
             return false;
@@ -558,6 +601,27 @@ public class BrowserView extends GeckoView {
     }
 
     public void resumeTimers() {
+    }
+
+    public void setTransparentSurface(boolean on) {
+        int backend = on ? BACKEND_TEXTURE_VIEW : BACKEND_SURFACE_VIEW;
+        if (backend == viewBackend) {
+            return;
+        }
+        viewBackend = backend;
+        try {
+            GeckoSession attached = getSession();
+            if (attached != null) {
+                releaseSession();
+                setViewBackend(backend);
+                setSession(attached);
+                attached.getCompositorController().setClearColor(clearColor);
+                attached.setActive(!paused);
+            } else {
+                setViewBackend(backend);
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     public void setBackgroundColorValue(int color) {
@@ -758,10 +822,6 @@ public class BrowserView extends GeckoView {
                 port.postMessage(PageAgent.json("t", "css", "key", e.getKey(), "css", e.getValue()));
             } catch (Throwable ignored) {
             }
-        }
-        try {
-            port.postMessage(PageAgent.json("t", "dark", "on", BrowserEngine.get().isDarkMode()));
-        } catch (Throwable ignored) {
         }
         if (top && !pendingEvals.isEmpty()) {
             List<PendingEval> copy = new ArrayList<>(pendingEvals);

@@ -34,6 +34,9 @@ public final class PageAgent {
     private JSONArray lastPlugins;
     private final Map<String, String> lastCss = new HashMap<>();
     private int rid;
+    private int pluginSeq;
+    private int pluginSettledSeq;
+    private final List<Runnable> pluginWaiters = new ArrayList<>();
 
     PageAgent(BrowserEngine engine) {
         this.engine = engine;
@@ -153,7 +156,7 @@ public final class PageAgent {
 
     private void replayBackground() {
         if (lastPlugins != null) {
-            postBackground(json("t", "plugins", "list", lastPlugins));
+            postBackground(json("t", "plugins", "list", lastPlugins, "seq", pluginSeq));
         }
         for (Map.Entry<String, String> e : lastCss.entrySet()) {
             postBackground(json("t", "css", "key", e.getKey(), "css", e.getValue()));
@@ -168,6 +171,16 @@ public final class PageAgent {
 
     private void onBackgroundMessage(JSONObject m) {
         String t = m.optString("t");
+        if ("plugins.done".equals(t)) {
+            final int seq = m.optInt("seq", pluginSeq);
+            engine.mainHandler().post(new Runnable() {
+                @Override
+                public void run() {
+                    onPluginsSettled(seq);
+                }
+            });
+            return;
+        }
         if ("cookies.res".equals(t)) {
             CookieCallback cb = cookieCallbacks.remove(m.optString("rid"));
             if (cb != null) {
@@ -191,7 +204,43 @@ public final class PageAgent {
 
     public void pushPlugins(JSONArray list) {
         lastPlugins = list;
-        postBackground(json("t", "plugins", "list", list));
+        pluginSeq++;
+        postBackground(json("t", "plugins", "list", list, "seq", pluginSeq));
+    }
+
+    public void afterPluginsApplied(final Runnable task, long timeoutMs) {
+        if (pluginSettledSeq >= pluginSeq || backgroundPort == null) {
+            task.run();
+            return;
+        }
+        final Runnable once = new Runnable() {
+            private boolean done;
+
+            @Override
+            public void run() {
+                if (done) {
+                    return;
+                }
+                done = true;
+                pluginWaiters.remove(this);
+                task.run();
+            }
+        };
+        pluginWaiters.add(once);
+        engine.mainHandler().postDelayed(once, timeoutMs);
+    }
+
+    private void onPluginsSettled(int seq) {
+        if (seq > pluginSettledSeq) {
+            pluginSettledSeq = seq;
+        }
+        if (pluginSettledSeq < pluginSeq) {
+            return;
+        }
+        for (Runnable r : new ArrayList<>(pluginWaiters)) {
+            engine.mainHandler().removeCallbacks(r);
+            r.run();
+        }
     }
 
     public void setGlobalCss(String key, String css) {
@@ -201,15 +250,6 @@ public final class PageAgent {
         } else {
             lastCss.put(key, css);
             postBackground(json("t", "css", "key", key, "css", css));
-        }
-    }
-
-    public void broadcastDarkMode(boolean on) {
-        for (WeakReference<BrowserView> ref : new ArrayList<>(views.values())) {
-            BrowserView v = ref.get();
-            if (v != null) {
-                v.agentSend(json("t", "dark", "on", on), false);
-            }
         }
     }
 
