@@ -2,11 +2,11 @@ name: Build
 on:
   push:
     branches:
-      - main
+      - main2
+      
   pull_request:
-  
     branches:
-      - main
+      - main2
 permissions:
   contents: read
 
@@ -53,6 +53,20 @@ jobs:
           ./gradlew --no-daemon --stacktrace --warning-mode=all assembleRelease
           mv -vf app/build/outputs/apk/release/app-arm64-v8a-release.apk "${{ env.name }}-arm64-v8a.apk"
           mv -vf app/build/outputs/apk/release/app-armeabi-v7a-release.apk "${{ env.name }}-armeabi-v7a.apk"
+          ./gradlew --no-daemon --stacktrace --warning-mode=all -PbundleBuild=true bundleRelease
+          mv -vf app/build/outputs/bundle/release/app-release.aab "${{ env.name }}.aab"
+
+      - name: Build APKS
+        run: |
+          curl -fsSL -o bundletool.jar https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar
+          java -jar bundletool.jar build-apks \
+            --bundle="${{ env.name }}.aab" \
+            --output="${{ env.name }}.apks" \
+            --ks=app/test.jks \
+            --ks-pass=pass:test1234 \
+            --ks-key-alias=key0 \
+            --key-pass=pass:test1234
+          rm -f bundletool.jar
 
       - name: Upload
         uses: actions/upload-artifact@v4
@@ -61,3 +75,5 @@ jobs:
           path: |
             ${{ env.name }}-arm64-v8a.apk
             ${{ env.name }}-armeabi-v7a.apk
+            ${{ env.name }}.aab
+            ${{ env.name }}.apks
