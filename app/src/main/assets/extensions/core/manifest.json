@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Coara Core",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Coara Browser built-in page agent",
   "browser_specific_settings": {
     "gecko": {
@@ -13,10 +13,12 @@
     "nativeMessagingFromContent",
     "geckoViewAddons",
     "cookies",
+    "webRequest",
+    "webRequestBlocking",
     "<all_urls>"
   ],
   "background": {
-    "scripts": ["background.js"]
+    "scripts": ["adblock.js", "background.js"]
   },
   "content_scripts": [
     {

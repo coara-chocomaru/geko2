@@ -218,6 +218,9 @@
             case "cookies.clear":
                 cookiesClear(m.rid);
                 break;
+            case "adblock":
+                CoaraAdBlock.configure(m);
+                break;
             case "ping":
                 send({ t: "pong" });
                 break;
@@ -225,6 +228,10 @@
                 break;
         }
     }
+
+    CoaraAdBlock.setCountListener(function (n) {
+        send({ t: "adblock.count", n: n });
+    });
 
     connect();
     send({ t: "hello" });
