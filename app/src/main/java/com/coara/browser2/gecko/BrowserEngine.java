@@ -57,6 +57,7 @@ public final class BrowserEngine {
             BrowserEngine engine = new BrowserEngine(context);
             instance = engine;
             engine.start();
+            com.coara.browser2.fx.FxExtensionManager.get().start();
         }
     }
 
@@ -255,6 +256,12 @@ public final class BrowserEngine {
     public void setFontSizeFactor(float factor) {
         if (runtime != null) {
             runtime.getSettings().setFontSizeFactor(factor);
+        }
+    }
+
+    public void setCookieBehavior(int behavior) {
+        if (runtime != null) {
+            runtime.getSettings().getContentBlocking().setCookieBehavior(behavior);
         }
     }
 

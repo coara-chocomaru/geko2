@@ -1,5 +1,7 @@
 package com.coara.browser2.gecko;
 
+import com.coara.browser2.util.AdBlockEngine;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.mozilla.geckoview.GeckoResult;
@@ -33,6 +35,7 @@ public final class PageAgent {
     private PluginHandler pluginHandler;
     private JSONArray lastPlugins;
     private final Map<String, String> lastCss = new HashMap<>();
+    private JSONObject lastAdBlock;
     private int rid;
     private int pluginSeq;
     private int pluginSettledSeq;
@@ -161,6 +164,9 @@ public final class PageAgent {
         for (Map.Entry<String, String> e : lastCss.entrySet()) {
             postBackground(json("t", "css", "key", e.getKey(), "css", e.getValue()));
         }
+        if (lastAdBlock != null) {
+            postBackground(lastAdBlock);
+        }
         engine.mainHandler().post(new Runnable() {
             @Override
             public void run() {
@@ -179,6 +185,10 @@ public final class PageAgent {
                     onPluginsSettled(seq);
                 }
             });
+            return;
+        }
+        if ("adblock.count".equals(t)) {
+            AdBlockEngine.onBlockedCount(m.optInt("n"));
             return;
         }
         if ("cookies.res".equals(t)) {
@@ -241,6 +251,12 @@ public final class PageAgent {
             engine.mainHandler().removeCallbacks(r);
             r.run();
         }
+    }
+
+    public void pushAdBlock(boolean on, JSONObject rules, String script) {
+        JSONObject msg = on ? json("t", "adblock", "on", true, "rules", rules, "script", script) : json("t", "adblock", "on", false);
+        lastAdBlock = msg;
+        postBackground(msg);
     }
 
     public void setGlobalCss(String key, String css) {

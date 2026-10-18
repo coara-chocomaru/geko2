@@ -19,6 +19,7 @@ import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputConnectionWrapper;
 import android.view.inputmethod.InputMethodManager;
 
+import com.coara.browser2.util.TouchpadController;
 import com.coara.browser2.util.UiThread;
 
 import org.json.JSONArray;
@@ -126,6 +127,7 @@ public class BrowserView extends GeckoView {
         this.privateMode = privateMode;
         setFocusable(true);
         setFocusableInTouchMode(true);
+        com.coara.browser2.util.AdBlockEngine.attach(this);
     }
 
     public boolean isPrivateMode() {
@@ -202,6 +204,7 @@ public class BrowserView extends GeckoView {
         setSession(session);
         session.getCompositorController().setClearColor(clearColor);
         session.setActive(!paused);
+        com.coara.browser2.fx.FxExtensionManager.get().onSessionAttached(session, !paused);
         final GeckoSession target = session;
         BrowserEngine.get().whenAgentSettled(new Runnable() {
             @Override
@@ -218,6 +221,10 @@ public class BrowserView extends GeckoView {
             pendingHeaders = null;
             loadUrl(u, h);
         }
+    }
+
+    public GeckoSession createChildSession() {
+        return prepareAsChild();
     }
 
     GeckoSession prepareAsChild() {
@@ -586,6 +593,7 @@ public class BrowserView extends GeckoView {
         if (session != null) {
             session.setPriorityHint(GeckoSession.PRIORITY_DEFAULT);
             session.setActive(false);
+            com.coara.browser2.fx.FxExtensionManager.get().onTabActive(session, false);
         }
     }
 
@@ -594,6 +602,7 @@ public class BrowserView extends GeckoView {
         if (session != null) {
             session.setActive(true);
             session.setPriorityHint(GeckoSession.PRIORITY_HIGH);
+            com.coara.browser2.fx.FxExtensionManager.get().onTabActive(session, true);
         }
     }
 
@@ -1370,6 +1379,35 @@ public class BrowserView extends GeckoView {
         if (keyboardMode == CHAR_MODE_ENGLISH) {
             outAttrs.imeOptions |= EditorInfo.IME_FLAG_FORCE_ASCII;
         }
+    }
+
+    private boolean fingerGestureActive;
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        if (event == null) {
+            return false;
+        }
+        if (TouchpadController.shouldDropScreenTouch()) {
+            if (fingerGestureActive) {
+                fingerGestureActive = false;
+                MotionEvent cancel = MotionEvent.obtain(event);
+                cancel.setAction(MotionEvent.ACTION_CANCEL);
+                try {
+                    super.dispatchTouchEvent(cancel);
+                } finally {
+                    cancel.recycle();
+                }
+            }
+            return true;
+        }
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            fingerGestureActive = true;
+        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            fingerGestureActive = false;
+        }
+        return super.dispatchTouchEvent(event);
     }
 
     @Override
