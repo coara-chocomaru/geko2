@@ -14,10 +14,10 @@
         <com.google.android.material.appbar.MaterialToolbar
             android:id="@+id/topAppBar"
             android:layout_width="match_parent"
-            android:layout_height="70dp"
+            android:layout_height="56dp"
             android:background="@drawable/bg_browser_toolbar"
             android:elevation="6dp"
-            android:minHeight="70dp"
+            android:minHeight="56dp"
             app:contentInsetStart="0dp"
             app:contentInsetEnd="0dp"
             app:contentInsetStartWithNavigation="0dp"
@@ -33,17 +33,17 @@
                 android:orientation="horizontal"
                 android:paddingStart="12dp"
                 android:paddingEnd="12dp"
-                android:paddingTop="10dp"
-                android:paddingBottom="10dp">
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp">
 
                 <com.google.android.material.card.MaterialCardView
                     android:id="@+id/urlContainer"
                     android:layout_width="0dp"
-                    android:layout_height="46dp"
+                    android:layout_height="40dp"
                     android:layout_weight="1"
                     android:foreground="?attr/selectableItemBackground"
                     app:cardBackgroundColor="@android:color/transparent"
-                    app:cardCornerRadius="24dp"
+                    app:cardCornerRadius="20dp"
                     app:cardElevation="0dp"
                     app:strokeColor="#D9E0E7"
                     app:strokeWidth="1dp">
@@ -65,6 +65,15 @@
                             android:contentDescription="Favicon"
                             android:src="@drawable/transparent_vector" />
 
+                        <ImageView
+                            android:id="@+id/urlSecurityIcon"
+                            android:layout_width="16dp"
+                            android:layout_height="16dp"
+                            android:layout_marginEnd="6dp"
+                            android:contentDescription="接続の安全性"
+                            android:src="@drawable/ic_lock_small"
+                            android:visibility="gone" />
+
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/urlEditText"
                             android:layout_width="0dp"
@@ -76,10 +85,25 @@
                             android:imeOptions="actionGo"
                             android:includeFontPadding="false"
                             android:inputType="textUri"
+                            android:ellipsize="end"
+                            android:importantForAutofill="no"
+                            android:maxLines="1"
+                            android:selectAllOnFocus="true"
                             android:singleLine="true"
                             android:textColor="@android:color/black"
                             android:textColorHint="#69707A"
                             android:textSize="15sp" />
+
+                        <ImageView
+                            android:id="@+id/bookmarkStar"
+                            android:layout_width="40dp"
+                            android:layout_height="40dp"
+                            android:layout_marginStart="4dp"
+                            android:background="?attr/selectableItemBackgroundBorderless"
+                            android:contentDescription="ブックマーク"
+                            android:padding="8dp"
+                            android:src="@drawable/ic_star_outline"
+                            android:visibility="gone" />
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>
 
@@ -100,29 +124,34 @@
                     android:textColor="@android:color/white" />
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnNewTab"
-                    android:layout_width="47dp"
-                    android:layout_height="47dp"
-                    android:layout_marginStart="8dp"
-                    android:minWidth="47dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="2dp"
+                    android:contentDescription="新しいタブ"
+                    android:fontFamily="sans-serif-medium"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp"
+                    android:padding="0dp"
                     android:text="+"
                     android:textAllCaps="false"
-                    android:textSize="17sp"
-                    android:fontFamily="sans-serif-medium"
-                    app:cornerRadius="24dp"
-                    app:backgroundTint="@android:color/white"
                     android:textColor="@color/colorPrimary"
-                    app:strokeColor="#D9E0E7"
-                    app:strokeWidth="1dp" />
+                    android:textSize="24sp"
+                    app:backgroundTint="@android:color/transparent"
+                    app:cornerRadius="20dp"
+                    app:strokeWidth="0dp" />
                 <TextView
                     android:id="@+id/tabCountTextView"
-                    android:layout_width="35dp"
-                    android:layout_height="35dp"
-                    android:layout_marginStart="8dp"
-                    android:background="@drawable/bg_browser_chip"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="0dp"
+                    android:background="@drawable/bg_tab_counter"
+                    android:contentDescription="タブ一覧"
                     android:gravity="center"
                     android:text="1"
                     android:textColor="@color/colorPrimary"
-                    android:textSize="14sp"
+                    android:textSize="13sp"
                     android:textStyle="bold" />
             </LinearLayout>
                 <ImageButton
@@ -137,6 +166,18 @@
                     android:src="@drawable/ic_more_vert"
                     android:visibility="gone" />
         </com.google.android.material.appbar.MaterialToolbar>
+
+        <ProgressBar
+            android:id="@+id/pageProgressBar"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="3dp"
+            android:layout_marginTop="-3dp"
+            android:elevation="8dp"
+            android:max="100"
+            android:progressTint="@color/colorPrimary"
+            android:progressBackgroundTint="@android:color/transparent"
+            android:visibility="invisible" />
 
         <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
             android:id="@+id/swipeRefreshLayout"

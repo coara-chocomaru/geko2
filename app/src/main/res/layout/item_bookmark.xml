@@ -4,12 +4,12 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginHorizontal="12dp"
-    android:layout_marginVertical="6dp"
+    android:layout_marginHorizontal="4dp"
+    android:layout_marginVertical="3dp"
     android:foreground="?attr/selectableItemBackground"
     app:cardBackgroundColor="@android:color/white"
-    app:cardCornerRadius="24dp"
-    app:cardElevation="1dp"
+    app:cardCornerRadius="16dp"
+    app:cardElevation="0dp"
     app:strokeColor="#E0E3E7"
     app:strokeWidth="1dp">
 
@@ -17,17 +17,34 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
+        android:minHeight="60dp"
         android:orientation="horizontal"
-        android:padding="14dp">
+        android:paddingVertical="8dp"
+        android:paddingStart="12dp"
+        android:paddingEnd="4dp">
 
-        <ImageView
-            android:id="@+id/bookmarkFavicon"
-            android:layout_width="46dp"
-            android:layout_height="46dp"
-            android:background="@drawable/bg_browser_icon_chip"
-            android:contentDescription="Bookmark favicon"
-            android:padding="11dp"
-            android:src="@drawable/transparent_vector" />
+        <FrameLayout
+            android:layout_width="40dp"
+            android:layout_height="40dp">
+
+            <TextView
+                android:id="@+id/bookmarkInitial"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:gravity="center"
+                android:textColor="@android:color/white"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <ImageView
+                android:id="@+id/bookmarkFavicon"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@drawable/bg_browser_icon_chip"
+                android:contentDescription="Bookmark favicon"
+                android:padding="9dp"
+                android:src="@drawable/transparent_vector" />
+        </FrameLayout>
 
         <LinearLayout
             android:layout_width="0dp"
@@ -44,20 +61,40 @@
                 android:maxLines="1"
                 android:text="タイトル"
                 android:textColor="#1F1F1F"
-                android:textSize="16sp"
+                android:textSize="15sp"
                 android:textStyle="bold" />
 
             <androidx.appcompat.widget.AppCompatTextView
                 android:id="@+id/bookmarkUrl"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:ellipsize="end"
+                android:layout_marginTop="2dp"
+                android:ellipsize="middle"
                 android:maxLines="1"
                 android:text="URL"
                 android:textColor="#6E7681"
                 android:textSize="12sp" />
+
+            <androidx.appcompat.widget.AppCompatTextView
+                android:id="@+id/bookmarkFolder"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#1A73E8"
+                android:textSize="11sp"
+                android:visibility="gone" />
         </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/bookmarkMenu"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="メニュー"
+            android:src="@drawable/ic_more_vert"
+            android:tint="#5F6368" />
     </LinearLayout>
 
 </com.google.android.material.card.MaterialCardView>

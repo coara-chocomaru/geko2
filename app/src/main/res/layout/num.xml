@@ -1,106 +1,174 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:orientation="vertical"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:padding="8dp"
-    android:background="@android:color/white">
+    android:background="#0B1220"
+    android:orientation="vertical"
+    android:padding="12dp">
 
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp"
+        android:text="関数電卓"
+        android:textColor="#F8FAFC"
+        android:textSize="22sp"
+        android:textStyle="bold" />
 
     <EditText
         android:id="@+id/editTextNumber"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="数式を入力"
-        android:inputType="text"
-        android:textSize="32sp"
-        android:gravity="end"
-        android:padding="8dp"
-        android:background="@android:color/transparent"
-        android:layout_marginBottom="16dp" />
+        android:layout_marginBottom="8dp"
+        android:background="@drawable/num_input_background"
+        android:gravity="end|center_vertical"
+        android:hint="数式を入力（例: sin(30)+sqrt(9)）"
+        android:textColorHint="#A9B8CC"
+        android:imeOptions="actionDone"
+        android:inputType="text|textNoSuggestions"
+        android:maxLines="1"
+        android:padding="12dp"
+        android:selectAllOnFocus="false"
+        android:textColor="#F8FAFC"
+        android:textSize="25sp" />
 
-    
-    <GridLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:columnCount="4"
-        android:layout_marginTop="8dp">
-        
-        <Button android:id="@+id/button7" android:text="7"
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-        <Button android:id="@+id/button8" android:text="8"
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-        <Button android:id="@+id/button9" android:text="9"
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-        <Button android:id="@+id/buttonAdd" android:text="+"
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-
-        
-        <Button android:id="@+id/button4" android:text="4"
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-        <Button android:id="@+id/button5" android:text="5"
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-        <Button android:id="@+id/button6" android:text="6"
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-        <Button android:id="@+id/buttonSub" android:text="-"
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-
-        
-        <Button android:id="@+id/button1" android:text="1"
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-        <Button android:id="@+id/button2" android:text="2"
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-        <Button android:id="@+id/button3" android:text="3"
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-        <Button android:id="@+id/buttonMul" android:text="*"
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-
-        
-        <Button android:id="@+id/button0" android:text="0"
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-        <Button android:id="@+id/buttonDot" android:text="."
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-        <Button android:id="@+id/buttonDiv" android:text="/"
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-        <Button android:id="@+id/buttonEqual" android:text="="
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-
-        
-        <Button android:id="@+id/buttonOpenParen" android:text="("
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-        <Button android:id="@+id/buttonCloseParen" android:text=")"
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="1" android:padding="16dp" android:textSize="20sp"/>
-        <Button android:id="@+id/buttonClear" android:text="C"
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_columnWeight="2" android:padding="16dp" android:textSize="20sp"/>
-    </GridLayout>
-    
     <TextView
         android:id="@+id/textViewResult"
-        android:textIsSelectable="true"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:minHeight="48dp"
-        android:textSize="24sp"
-        android:gravity="center"
-        android:layout_marginTop="16dp"
-        android:padding="8dp" />
+        android:layout_marginBottom="8dp"
+        android:background="@drawable/num_result_background"
+        android:gravity="end|center_vertical"
+        android:minHeight="56dp"
+        android:padding="12dp"
+        android:textColor="#67E8F9"
+        android:textIsSelectable="true"
+        android:textSize="23sp"
+        android:textStyle="bold" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:overScrollMode="ifContentScrolls">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:layout_marginBottom="4dp"
+                android:text="関数・定数"
+                android:textColor="#B8C7DC"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <GridLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:columnCount="4"
+                android:useDefaultMargins="false">
+
+                <Button android:id="@+id/buttonSin" style="@style/NumScientificButton" android:text="sin" />
+                <Button android:id="@+id/buttonCos" style="@style/NumScientificButton" android:text="cos" />
+                <Button android:id="@+id/buttonTan" style="@style/NumScientificButton" android:text="tan" />
+                <Button android:id="@+id/buttonAngle" style="@style/NumAccentButton" android:text="DEG" />
+
+                <Button android:id="@+id/buttonAsin" style="@style/NumScientificButton" android:text="asin" />
+                <Button android:id="@+id/buttonAcos" style="@style/NumScientificButton" android:text="acos" />
+                <Button android:id="@+id/buttonAtan" style="@style/NumScientificButton" android:text="atan" />
+                <Button android:id="@+id/buttonSqrt" style="@style/NumScientificButton" android:text="√" />
+
+                <Button android:id="@+id/buttonLn" style="@style/NumScientificButton" android:text="ln" />
+                <Button android:id="@+id/buttonLog" style="@style/NumScientificButton" android:text="log" />
+                <Button android:id="@+id/buttonAbs" style="@style/NumScientificButton" android:text="abs" />
+                <Button android:id="@+id/buttonExp" style="@style/NumScientificButton" android:text="exp" />
+
+                <Button android:id="@+id/buttonPi" style="@style/NumScientificButton" android:text="π" />
+                <Button android:id="@+id/buttonE" style="@style/NumScientificButton" android:text="e" />
+                <Button android:id="@+id/buttonPower" style="@style/NumScientificButton" android:text="xʸ" />
+                <Button android:id="@+id/buttonPercent" style="@style/NumScientificButton" android:text="%" />
+
+                <Button android:id="@+id/buttonOpenParen" style="@style/NumScientificButton" android:text="(" />
+                <Button android:id="@+id/buttonCloseParen" style="@style/NumScientificButton" android:text=")" />
+                <Button android:id="@+id/buttonFactorial" style="@style/NumScientificButton" android:text="n!" />
+                <Button android:id="@+id/buttonBackspace" style="@style/NumAccentButton" android:text="⌫" />
+
+                <Button android:id="@+id/buttonCbrt" style="@style/NumScientificButton" android:text="∛" />
+                <Button android:id="@+id/buttonSinh" style="@style/NumScientificButton" android:text="sinh" />
+                <Button android:id="@+id/buttonCosh" style="@style/NumScientificButton" android:text="cosh" />
+                <Button android:id="@+id/buttonTanh" style="@style/NumScientificButton" android:text="tanh" />
+
+                <Button android:id="@+id/buttonFloor" style="@style/NumScientificButton" android:text="floor" />
+                <Button android:id="@+id/buttonCeil" style="@style/NumScientificButton" android:text="ceil" />
+                <Button android:id="@+id/buttonRound" style="@style/NumScientificButton" android:text="round" />
+                <Button android:id="@+id/buttonComma" style="@style/NumScientificButton" android:text="," />
+
+                <Button android:id="@+id/buttonMin" style="@style/NumScientificButton" android:text="min" />
+                <Button android:id="@+id/buttonMax" style="@style/NumScientificButton" android:text="max" />
+                <Button android:id="@+id/buttonPow" style="@style/NumScientificButton" android:text="pow" />
+                <Button android:id="@+id/buttonExclamation" style="@style/NumAccentButton" android:text="!" android:contentDescription="感嘆符を入力" />
+            </GridLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:layout_marginBottom="4dp"
+                android:text="数字・四則演算"
+                android:textColor="#B8C7DC"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <GridLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:columnCount="4"
+                android:useDefaultMargins="false">
+
+                <Button android:id="@+id/button7" style="@style/NumDigitButton" android:text="7" />
+                <Button android:id="@+id/button8" style="@style/NumDigitButton" android:text="8" />
+                <Button android:id="@+id/button9" style="@style/NumDigitButton" android:text="9" />
+                <Button android:id="@+id/buttonDiv" style="@style/NumOperatorButton" android:text="÷" />
+
+                <Button android:id="@+id/button4" style="@style/NumDigitButton" android:text="4" />
+                <Button android:id="@+id/button5" style="@style/NumDigitButton" android:text="5" />
+                <Button android:id="@+id/button6" style="@style/NumDigitButton" android:text="6" />
+                <Button android:id="@+id/buttonMul" style="@style/NumOperatorButton" android:text="×" />
+
+                <Button android:id="@+id/button1" style="@style/NumDigitButton" android:text="1" />
+                <Button android:id="@+id/button2" style="@style/NumDigitButton" android:text="2" />
+                <Button android:id="@+id/button3" style="@style/NumDigitButton" android:text="3" />
+                <Button android:id="@+id/buttonSub" style="@style/NumOperatorButton" android:text="−" />
+
+                <Button android:id="@+id/button0" style="@style/NumDigitButton" android:text="0" />
+                <Button android:id="@+id/buttonDot" style="@style/NumDigitButton" android:text="." />
+                <Button android:id="@+id/buttonClear" style="@style/NumClearButton" android:text="C" />
+                <Button android:id="@+id/buttonAdd" style="@style/NumOperatorButton" android:text="+" />
+            </GridLayout>
+
+            <Button
+                android:id="@+id/buttonEqual"
+                style="@style/NumEqualButton"
+                android:layout_width="match_parent"
+                android:layout_height="54dp"
+                android:layout_margin="3dp"
+                android:contentDescription="計算"
+                android:text="=" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="4dp"
+                android:text="例: sin(30)   2^8   sqrt(81)   log(100)   min(3,5)"
+                android:textColor="#A9B8CC"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </ScrollView>
 </LinearLayout>

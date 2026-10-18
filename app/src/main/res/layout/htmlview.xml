@@ -1,16 +1,19 @@
-<RelativeLayout 
-    xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"    
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/rootLayout"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="#17191C">
 
     <LinearLayout
         android:id="@+id/topLayout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:padding="8dp">
+        android:gravity="center_vertical"
+        android:padding="6dp"
+        android:background="#25282D">
 
         <EditText
             android:id="@+id/urlInput"
@@ -18,109 +21,68 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:hint="URLを入力"
-            android:textSize="18sp"
+            android:textColor="#F0F0F0"
+            android:textColorHint="#A0A0A0"
+            android:backgroundTint="#569CD6"
+            android:textSize="14sp"
             android:inputType="textUri"
             android:singleLine="true"
             android:imeOptions="actionGo"
-            android:minWidth="200dp"
+            android:minWidth="0dp"
             android:textIsSelectable="true"
             android:longClickable="true" />
 
         <Button
-           android:id="@+id/loadButton"
-           android:layout_width="wrap_content"
-           android:layout_height="wrap_content"
-           android:textSize="13sp"
-           android:padding="4dp"
-           android:minWidth="48dp"
-           android:minHeight="32dp"
-           android:text="読み込み" />
+            android:id="@+id/loadButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="48dp"
+            android:minHeight="36dp"
+            android:paddingLeft="6dp"
+            android:paddingRight="6dp"
+            android:text="読み込み"
+            android:textSize="12sp" />
 
         <Button
             android:id="@+id/loadFromStorageButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="ファイル選択"
-            android:textSize="13sp"
-            android:padding="4dp"
+            android:layout_marginStart="3dp"
             android:minWidth="48dp"
-            android:minHeight="32dp"
-            android:layout_marginStart="2dp"/>
+            android:minHeight="36dp"
+            android:paddingLeft="6dp"
+            android:paddingRight="6dp"
+            android:text="ファイル"
+            android:textSize="12sp" />
     </LinearLayout>
-
 
     <Button
         android:id="@+id/searchButton"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="検索"
-        android:layout_alignParentEnd="true"
         android:layout_below="@id/topLayout"
-        android:layout_margin="4dp"/>
+        android:layout_alignParentEnd="true"
+        android:layout_margin="3dp"
+        android:minHeight="34dp"
+        android:text="検索"
+        android:textSize="12sp" />
 
-    
-    <RelativeLayout
-        android:id="@+id/searchOverlay"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:background="#88000000"
-        android:visibility="gone"
-        android:padding="8dp">
-
-        <EditText
-            android:id="@+id/searchQueryEditText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textColor="#00FFFF"
-            android:hint="検索語を入力"
-            android:textIsSelectable="true"
-            android:longClickable="true" />
-
-        <Button
-            android:id="@+id/searchPrevButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="←"
-            android:layout_below="@id/searchQueryEditText"
-            android:layout_alignParentStart="true"
-            android:layout_marginTop="4dp"/>
-
-        <Button
-            android:id="@+id/searchNextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="→"
-            android:layout_toEndOf="@id/searchPrevButton"
-            android:layout_below="@id/searchQueryEditText"
-            android:layout_marginStart="16dp"
-            android:layout_marginTop="4dp"/>
-
-        <TextView
-            android:id="@+id/searchResultCountTextView"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textColor="#FFFFFF"
-            android:layout_alignParentEnd="true"
-            android:layout_below="@id/searchQueryEditText"
-            android:layout_marginTop="8dp"
-            android:textIsSelectable="true"
-            android:longClickable="true"/>
-
-        <Button
-            android:id="@+id/closeSearchButton"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:text="X"
-            android:textSize="16sp"
-            android:gravity="center"
-            android:padding="0dp"
-            android:background="?android:attr/selectableItemBackground"
-            android:layout_alignParentEnd="true"
-            android:layout_alignParentTop="true"
-            android:layout_marginEnd="4dp"
-            android:layout_marginTop="4dp"/>
-    </RelativeLayout>
-
+    <TextView
+        android:id="@+id/sourceStatusTextView"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_below="@id/topLayout"
+        android:layout_alignParentStart="true"
+        android:layout_toStartOf="@id/searchButton"
+        android:layout_alignBottom="@id/searchButton"
+        android:gravity="center_vertical"
+        android:paddingStart="8dp"
+        android:paddingEnd="4dp"
+        android:text="HTMLソース | 閲覧モード"
+        android:textColor="#A8B0BA"
+        android:textSize="11sp"
+        android:ellipsize="end"
+        android:singleLine="true" />
 
     <ScrollView
         android:id="@+id/scrollView"
@@ -128,58 +90,161 @@
         android:layout_height="match_parent"
         android:layout_below="@id/searchButton"
         android:layout_above="@id/bottomLayout"
-        android:padding="8dp"
+        android:fillViewport="false"
+        android:padding="0dp"
+        android:background="#1E1E1E"
         android:overScrollMode="always">
 
-        <EditText
-            android:id="@+id/htmlEditText"
+        <LinearLayout
+            android:id="@+id/sourceRow"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="#F5F5F5"
-            android:textSize="13sp"
-            android:scrollbars="vertical"
-            android:inputType="textMultiLine|textNoSuggestions"
-            android:textIsSelectable="true"
-            android:focusable="true"
-            android:focusableInTouchMode="true"
-            android:gravity="top|start"
-            android:padding="8dp"
-            android:longClickable="true" />
+            android:orientation="horizontal"
+            android:gravity="top"
+            android:background="#1E1E1E">
+
+            <TextView
+                android:id="@+id/lineNumberTextView"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="42dp"
+                android:minHeight="300dp"
+                android:gravity="top|end"
+                android:paddingStart="4dp"
+                android:paddingEnd="8dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:fontFamily="monospace"
+                android:textSize="14sp"
+                android:textColor="#6E7681"
+                android:background="#191B1F"
+                android:includeFontPadding="true"
+                android:text="1" />
+
+            <EditText
+                android:id="@+id/htmlEditText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:minHeight="300dp"
+                android:background="#1E1E1E"
+                android:textColor="#D4D4D4"
+                android:textColorHint="#777777"
+                android:textSize="14sp"
+                android:fontFamily="monospace"
+                android:lineSpacingExtra="0dp"
+                android:inputType="textMultiLine|textNoSuggestions"
+                android:textIsSelectable="true"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:gravity="top|start"
+                android:padding="8dp"
+                android:scrollHorizontally="true"
+                android:longClickable="true"
+                />
+        </LinearLayout>
     </ScrollView>
 
-    
     <LinearLayout
         android:id="@+id/bottomLayout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_alignParentBottom="true"
         android:orientation="horizontal"
-        android:textIsSelectable="true"
-        android:padding="8dp"
-        android:gravity="center">
+        android:padding="4dp"
+        android:gravity="center_vertical|center_horizontal"
+        android:background="#25282D">
 
         <Button
             android:id="@+id/editButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="編集" />
+            android:minHeight="36dp"
+            android:text="編集"
+            android:textSize="13sp" />
 
         <Button
             android:id="@+id/saveButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:minHeight="36dp"
             android:text="保存"
-            android:layout_marginStart="16dp"/>
+            android:textSize="13sp" />
     </LinearLayout>
-
 
     <com.google.android.material.floatingactionbutton.FloatingActionButton
         android:id="@+id/revertFab"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:src="@android:drawable/ic_menu_revert"
         android:layout_alignParentBottom="true"
         android:layout_alignParentEnd="true"
-        android:layout_margin="16dp" />
+        android:layout_margin="14dp"
+        android:contentDescription="元に戻す"
+        android:src="@android:drawable/ic_menu_revert"
+        app:fabSize="mini" />
 
+    <RelativeLayout
+        android:id="@+id/searchOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#E617191C"
+        android:padding="10dp"
+        android:visibility="gone">
+
+        <EditText
+            android:id="@+id/searchQueryEditText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_toStartOf="@id/closeSearchButton"
+            android:layout_marginEnd="8dp"
+            android:hint="検索語を入力"
+            android:textColor="#F0F0F0"
+            android:textColorHint="#A0A0A0"
+            android:backgroundTint="#569CD6"
+            android:textIsSelectable="true"
+            android:longClickable="true" />
+
+        <Button
+            android:id="@+id/closeSearchButton"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_alignParentEnd="true"
+            android:layout_alignParentTop="true"
+            android:gravity="center"
+            android:padding="0dp"
+            android:text="×"
+            android:textSize="20sp" />
+
+        <Button
+            android:id="@+id/searchPrevButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_below="@id/searchQueryEditText"
+            android:layout_alignParentStart="true"
+            android:layout_marginTop="8dp"
+            android:text="← 前へ" />
+
+        <Button
+            android:id="@+id/searchNextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_below="@id/searchQueryEditText"
+            android:layout_toEndOf="@id/searchPrevButton"
+            android:layout_marginStart="8dp"
+            android:layout_marginTop="8dp"
+            android:text="次へ →" />
+
+        <TextView
+            android:id="@+id/searchResultCountTextView"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_below="@id/searchQueryEditText"
+            android:layout_alignParentEnd="true"
+            android:layout_marginTop="16dp"
+            android:text="件数: 0"
+            android:textColor="#FFFFFF"
+            android:textIsSelectable="true"
+            android:longClickable="true" />
+    </RelativeLayout>
 </RelativeLayout>
