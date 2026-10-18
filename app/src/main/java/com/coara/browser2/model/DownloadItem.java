@@ -16,6 +16,9 @@ public class DownloadItem {
     public boolean basicAuthEnabled;
     public String filePath;
     public String mimeType;
+    public long timestamp;
+    public boolean fileExists;
+    public String host = "";
 
     public DownloadItem(long downloadId, String title, String description, int status, long downloadedSize, long totalSize, String localUri, String downloadUrl) {
         this.downloadId = downloadId;
