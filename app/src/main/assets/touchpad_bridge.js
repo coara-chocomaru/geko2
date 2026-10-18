@@ -311,24 +311,26 @@
     function crossing(oldT, nu) {
         var oc = oldT ? chain(oldT.el) : [];
         var nc = chain(nu.el);
+        var oi = oc.length - 1;
+        var ni = nc.length - 1;
+        while (oi >= 0 && ni >= 0 && oc[oi] === nc[ni]) {
+            oi--;
+            ni--;
+        }
         var i;
         if (oldT) {
             fire(oldT, "pointerout", { related: nu.el });
             fire(oldT, "mouseout", { related: nu.el });
-            for (i = 0; i < oc.length; i++) {
-                if (nc.indexOf(oc[i]) < 0) {
-                    fire({ el: oc[i], ox: oldT.ox, oy: oldT.oy }, "pointerleave", { related: nu.el });
-                    fire({ el: oc[i], ox: oldT.ox, oy: oldT.oy }, "mouseleave", { related: nu.el });
-                }
+            for (i = 0; i <= oi; i++) {
+                fire({ el: oc[i], ox: oldT.ox, oy: oldT.oy }, "pointerleave", { related: nu.el });
+                fire({ el: oc[i], ox: oldT.ox, oy: oldT.oy }, "mouseleave", { related: nu.el });
             }
         }
         fire(nu, "pointerover", { related: oldT ? oldT.el : null });
         fire(nu, "mouseover", { related: oldT ? oldT.el : null });
-        for (i = nc.length - 1; i >= 0; i--) {
-            if (oc.indexOf(nc[i]) < 0) {
-                fire({ el: nc[i], ox: nu.ox, oy: nu.oy }, "pointerenter", { related: oldT ? oldT.el : null });
-                fire({ el: nc[i], ox: nu.ox, oy: nu.oy }, "mouseenter", { related: oldT ? oldT.el : null });
-            }
+        for (i = ni; i >= 0; i--) {
+            fire({ el: nc[i], ox: nu.ox, oy: nu.oy }, "pointerenter", { related: oldT ? oldT.el : null });
+            fire({ el: nc[i], ox: nu.ox, oy: nu.oy }, "mouseenter", { related: oldT ? oldT.el : null });
         }
     }
 
@@ -500,8 +502,9 @@
         if (!nativeActive && !activate()) {
             return;
         }
-        ensure();
-        measure();
+        if (!layer || !layer.parentNode) {
+            ensure();
+        }
         cx = clamp(cx + dx, 0, _vw - 1);
         cy = clamp(cy + dy, 0, _vh - 1);
         if (cur) {
@@ -1004,13 +1007,22 @@
         }
         pad.axes[0] = ax;
         pad.axes[1] = ay;
-        var map = [dirs.u, dirs.d, dirs.l, dirs.r];
-        for (var i = 0; i < 4; i++) {
-            var b = pad.buttons[12 + i];
-            b.pressed = map[i];
-            b.touched = map[i];
-            b.value = map[i] ? 1 : 0;
-        }
+        var b = pad.buttons[12];
+        b.pressed = dirs.u;
+        b.touched = dirs.u;
+        b.value = dirs.u ? 1 : 0;
+        b = pad.buttons[13];
+        b.pressed = dirs.d;
+        b.touched = dirs.d;
+        b.value = dirs.d ? 1 : 0;
+        b = pad.buttons[14];
+        b.pressed = dirs.l;
+        b.touched = dirs.l;
+        b.value = dirs.l ? 1 : 0;
+        b = pad.buttons[15];
+        b.pressed = dirs.r;
+        b.touched = dirs.r;
+        b.value = dirs.r ? 1 : 0;
         pad.timestamp = nowMs();
     }
 
