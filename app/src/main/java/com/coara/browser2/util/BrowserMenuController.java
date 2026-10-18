@@ -39,17 +39,55 @@ public final class BrowserMenuController {
     private BrowserMenuController() {
     }
 
+    private static BrowserThemeManager.MenuStyle defaultStyleCache;
+
+    private static BrowserThemeManager.MenuStyle styleOf(Activity activity) {
+        BrowserThemeManager.ThemeInfo theme = BrowserThemeManager.getActiveTheme(activity);
+        if (theme != null && theme.menuStyle != null && theme.menuStyle.customized) return theme.menuStyle;
+        if (defaultStyleCache == null) {
+            defaultStyleCache = BrowserThemeManager.MenuStyle.defaultStyle(BrowserThemeManager.getDefaultPalette());
+        }
+        return defaultStyleCache;
+    }
+
+    private static String styleKey(Activity activity) {
+        BrowserThemeManager.ThemeInfo theme = BrowserThemeManager.getActiveTheme(activity);
+        if (theme != null && theme.menuStyle != null && theme.menuStyle.customized) return theme.fileName + ":" + theme.modifiedAt;
+        return "builtin";
+    }
+
+    public static final class QuickAction {
+        public final int icon;
+        public final String label;
+        public final boolean enabled;
+        public final Runnable action;
+
+        public QuickAction(int icon, String label, boolean enabled, Runnable action) {
+            this.icon = icon;
+            this.label = label;
+            this.enabled = enabled;
+            this.action = action;
+        }
+    }
+
+    public interface QuickActionProvider {
+        java.util.List<QuickAction> quickActions();
+    }
+
+    private static final Map<Activity, QuickActionProvider> QUICK = new WeakHashMap<>();
+
+    public static void setQuickActions(Activity activity, QuickActionProvider provider) {
+        if (activity == null) return;
+        if (provider == null) QUICK.remove(activity); else QUICK.put(activity, provider);
+    }
+
     public static void prepare(Activity activity, Menu menu) {
         if (activity == null || menu == null || activity.isFinishing() || activity.isDestroyed()) return;
-        BrowserThemeManager.ThemeInfo theme = BrowserThemeManager.getActiveTheme(activity);
-        if (theme == null || theme.menuStyle == null || !theme.menuStyle.customized) {
-            restore(activity);
-            return;
-        }
+        BrowserThemeManager.MenuStyle theme = styleOf(activity);
         Toolbar toolbar = activity.findViewById(R.id.topAppBar);
         View customButton = activity.findViewById(R.id.themeOverflowButton);
         if (toolbar == null || customButton == null) return;
-        String key = theme.fileName + ":" + theme.modifiedAt;
+        String key = styleKey(activity);
         Binding binding = BINDINGS.get(activity);
         if (binding == null || binding.toolbar != toolbar || binding.menu != menu || binding.customButton != customButton) {
             if (binding != null) restoreBinding(binding);
@@ -63,16 +101,12 @@ public final class BrowserMenuController {
         binding.customMode = true;
         ensureToolbarListener(activity, binding);
         ensureActionMenuListener(activity, binding);
-        applyCustomMode(activity, binding, theme.menuStyle);
+        applyCustomMode(activity, binding, theme);
         final Binding postedBinding = binding;
         toolbar.post(() -> {
             if (!postedBinding.active || !postedBinding.customMode) return;
-            BrowserThemeManager.ThemeInfo currentTheme = BrowserThemeManager.getActiveTheme(activity);
-            if (currentTheme == null || currentTheme.menuStyle == null || !currentTheme.menuStyle.customized) {
-                restore(activity);
-                return;
-            }
-            applyCustomMode(activity, postedBinding, currentTheme.menuStyle);
+            BrowserThemeManager.MenuStyle currentTheme = styleOf(activity);
+            applyCustomMode(activity, postedBinding, currentTheme);
         });
     }
 
@@ -80,11 +114,7 @@ public final class BrowserMenuController {
         if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
         Toolbar toolbar = activity.findViewById(R.id.topAppBar);
         if (toolbar == null) return;
-        BrowserThemeManager.ThemeInfo theme = BrowserThemeManager.getActiveTheme(activity);
-        if (theme == null || theme.menuStyle == null || !theme.menuStyle.customized) {
-            restore(activity);
-            return;
-        }
+        BrowserThemeManager.MenuStyle theme = styleOf(activity);
         prepare(activity, toolbar.getMenu());
     }
 
@@ -138,13 +168,9 @@ public final class BrowserMenuController {
         if (binding.toolbar == null || binding.toolbarLayoutListener != null) return;
         binding.toolbarLayoutListener = (v, l, t, r, b, ol, ot, or, ob) -> {
             if (!binding.active || !binding.customMode) return;
-            BrowserThemeManager.ThemeInfo current = BrowserThemeManager.getActiveTheme(activity);
-            if (current == null || current.menuStyle == null || !current.menuStyle.customized) {
-                restore(activity);
-                return;
-            }
+            BrowserThemeManager.MenuStyle current = styleOf(activity);
             ensureActionMenuListener(activity, binding);
-            applyCustomMode(activity, binding, current.menuStyle);
+            applyCustomMode(activity, binding, current);
         };
         binding.toolbar.addOnLayoutChangeListener(binding.toolbarLayoutListener);
     }
@@ -158,12 +184,8 @@ public final class BrowserMenuController {
         binding.actionMenuView = menuView;
         binding.actionMenuLayoutListener = (v, l, t, r, b, ol, ot, or, ob) -> {
             if (!binding.active || !binding.customMode) return;
-            BrowserThemeManager.ThemeInfo currentTheme = BrowserThemeManager.getActiveTheme(activity);
-            if (currentTheme == null || currentTheme.menuStyle == null || !currentTheme.menuStyle.customized) {
-                restore(activity);
-                return;
-            }
-            applyCustomMode(activity, binding, currentTheme.menuStyle);
+            BrowserThemeManager.MenuStyle currentTheme = styleOf(activity);
+            applyCustomMode(activity, binding, currentTheme);
         };
         menuView.addOnLayoutChangeListener(binding.actionMenuLayoutListener);
     }
@@ -262,14 +284,10 @@ public final class BrowserMenuController {
             button.setContentDescription("メニュー");
             button.setOnClickListener(v -> {
                 if (!binding.active || !binding.customMode || binding.customButton != v || binding.menu == null) return;
-                BrowserThemeManager.ThemeInfo current = BrowserThemeManager.getActiveTheme(activity);
-                if (current == null || current.menuStyle == null || !current.menuStyle.customized) {
-                    restore(activity);
-                    return;
-                }
+                BrowserThemeManager.MenuStyle current = styleOf(activity);
                 View standard = findStandardOverflow(binding.toolbar);
-                if (standard != null) concealStandard(binding, standard, current.menuStyle);
-                show(activity, v, binding.menu, current.menuStyle);
+                if (standard != null) concealStandard(binding, standard, current);
+                show(activity, v, binding.menu, current);
             });
         }
         if (!binding.styledKey.equals(binding.key)) {
@@ -497,7 +515,7 @@ public final class BrowserMenuController {
 
         void render() {
             content.removeAllViews();
-            if (!stack.isEmpty()) addBackRow();
+            if (!stack.isEmpty()) addBackRow(); else addQuickRow();
             boolean showIcons = hasVisibleIcons(currentMenu);
             boolean addedAny = false;
             int visibleIndex = 0;
@@ -525,6 +543,58 @@ public final class BrowserMenuController {
             if (popup.isShowing()) popup.update(popup.getWidth(), measured);
             int targetScroll = scrollPositions.isEmpty() ? 0 : scrollPositions.peekLast();
             content.post(() -> scrollView.scrollTo(0, targetScroll));
+        }
+
+        void addQuickRow() {
+            QuickActionProvider provider = QUICK.get(activity);
+            if (provider == null) return;
+            java.util.List<QuickAction> list;
+            try {
+                list = provider.quickActions();
+            } catch (Throwable t) {
+                return;
+            }
+            if (list == null || list.isEmpty()) return;
+            LinearLayout row = new LinearLayout(activity);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            int cellHeight = dp(62, density);
+            for (final QuickAction q : list) {
+                LinearLayout cell = new LinearLayout(activity);
+                cell.setOrientation(LinearLayout.VERTICAL);
+                cell.setGravity(Gravity.CENTER);
+                cell.setBackground(rowBackground(style, density, false, false));
+                ImageView icon = new ImageView(activity);
+                Drawable d = AppCompatResources.getDrawable(activity, q.icon);
+                if (d != null) {
+                    d = DrawableCompat.wrap(d.mutate());
+                    DrawableCompat.setTint(d, q.enabled ? style.iconTint : style.secondary);
+                    icon.setImageDrawable(d);
+                }
+                icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+                cell.addView(icon, new LinearLayout.LayoutParams(dp(24, density), dp(24, density)));
+                TextView label = textView(q.label, q.enabled ? style.text : style.secondary, 11, false, activity);
+                label.setGravity(Gravity.CENTER);
+                LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                llp.topMargin = dp(4, density);
+                cell.addView(label, llp);
+                cell.setEnabled(q.enabled);
+                cell.setAlpha(q.enabled ? 1f : 0.48f);
+                cell.setContentDescription(q.label);
+                if (q.enabled) {
+                    cell.setOnClickListener(v -> {
+                        dismissAll();
+                        if (q.action != null) content.post(q.action);
+                    });
+                }
+                LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, cellHeight, 1f);
+                clp.setMargins(dp(2, density), 0, dp(2, density), 0);
+                row.addView(cell, clp);
+            }
+            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, cellHeight);
+            rlp.bottomMargin = dp(6, density);
+            content.addView(row, rlp);
+            if (style.useDividers) addDivider();
         }
 
         void addBackRow() {
