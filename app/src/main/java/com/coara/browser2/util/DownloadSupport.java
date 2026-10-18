@@ -991,6 +991,11 @@ public final class DownloadSupport {
         return fileName.substring(dot);
     }
 
+    private static boolean isBidiOrInvisibleSpoofChar(int cp) {
+        return cp == 0x200E || cp == 0x200F || (cp >= 0x202A && cp <= 0x202E)
+                || (cp >= 0x2066 && cp <= 0x2069) || cp == 0xFEFF || cp == 0x2028 || cp == 0x2029;
+    }
+
     public static String sanitizeFileName(String value) {
         if (value == null) {
             return "";
@@ -1000,7 +1005,7 @@ public final class DownloadSupport {
         for (int i = 0; i < value.length(); ) {
             int codePoint = value.codePointAt(i);
             i += Character.charCount(codePoint);
-            if (Character.isISOControl(codePoint) || codePoint == 0) {
+            if (Character.isISOControl(codePoint) || codePoint == 0 || isBidiOrInvisibleSpoofChar(codePoint)) {
                 continue;
             }
             if (codePoint == '/' || codePoint == '\\') {

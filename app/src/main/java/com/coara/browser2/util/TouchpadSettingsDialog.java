@@ -19,6 +19,9 @@ public final class TouchpadSettingsDialog {
         void onSizeChanged();
 
         void onStickChanged();
+
+        default void onScreenTouchChanged() {
+        }
     }
 
     private TouchpadSettingsDialog() {
@@ -71,6 +74,14 @@ public final class TouchpadSettingsDialog {
         LinearLayout.LayoutParams alwaysParams = new LinearLayout.LayoutParams(-1, -2);
         alwaysParams.topMargin = (int) (12 * density + 0.5f);
         container.addView(always, alwaysParams);
+
+        SwitchMaterial blockTouch = new SwitchMaterial(activity);
+        blockTouch.setText("画面のタッチを無効にする\nタッチパッド表示中はページへの直接タッチを受け付けません");
+        blockTouch.setTextSize(16);
+        blockTouch.setChecked(TouchpadSettings.isScreenTouchBlocked(prefs));
+        LinearLayout.LayoutParams blockParams = new LinearLayout.LayoutParams(-1, -2);
+        blockParams.topMargin = (int) (12 * density + 0.5f);
+        container.addView(blockTouch, blockParams);
 
         SwitchMaterial stickSwitch = new SwitchMaterial(activity);
         stickSwitch.setText("アナログスティックを表示");
@@ -140,6 +151,12 @@ public final class TouchpadSettingsDialog {
             }
         });
         always.setOnCheckedChangeListener((button, checked) -> TouchpadSettings.setAlwaysVisible(prefs, checked));
+        blockTouch.setOnCheckedChangeListener((button, checked) -> {
+            TouchpadSettings.setScreenTouchBlocked(prefs, checked);
+            if (callback != null) {
+                callback.onScreenTouchChanged();
+            }
+        });
         stickSwitch.setOnCheckedChangeListener((button, checked) -> {
             TouchpadSettings.setStickEnabled(prefs, checked);
             sideLeft.setEnabled(checked);

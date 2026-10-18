@@ -21,6 +21,7 @@ public final class BrowserConstants {
     public static final String KEY_DOWNLOAD_HISTORY = "download_history";
     public static final String KEY_PIN_LOCK_ENABLED = "pin_lock_enabled";
     public static final String KEY_ACTIVE_THEME_FILE = "active_theme_file";
+    public static final String KEY_THIRD_PARTY_COOKIES = "third_party_cookies_enabled";
 
     public static final String APP_ASSET_BASE_URL = "https://assets.coara.invalid/assets/";
     public static final String APP_ASSET_START_PAGE = APP_ASSET_BASE_URL + "index.html";

@@ -8,6 +8,7 @@ public final class TouchpadSettings {
     public static final String KEY_STICK_ENABLED = "touchpad_stick_enabled";
     public static final String KEY_STICK_MODE = "touchpad_stick_mode";
     public static final String KEY_STICK_SIDE = "touchpad_stick_side";
+    public static final String KEY_BLOCK_SCREEN_TOUCH = "touchpad_block_screen_touch";
     public static final int SIDE_LEFT = 0;
     public static final int SIDE_RIGHT = 1;
     public static final int SIZE_SMALL = 0;
@@ -76,6 +77,17 @@ public final class TouchpadSettings {
             return;
         }
         preferences.edit().putBoolean(KEY_ALWAYS_VISIBLE, enabled).apply();
+    }
+
+    public static boolean isScreenTouchBlocked(SharedPreferences preferences) {
+        return preferences != null && preferences.getBoolean(KEY_BLOCK_SCREEN_TOUCH, false);
+    }
+
+    public static void setScreenTouchBlocked(SharedPreferences preferences, boolean blocked) {
+        if (preferences == null) {
+            return;
+        }
+        preferences.edit().putBoolean(KEY_BLOCK_SCREEN_TOUCH, blocked).apply();
     }
 
     public static boolean isStickEnabled(SharedPreferences preferences) {

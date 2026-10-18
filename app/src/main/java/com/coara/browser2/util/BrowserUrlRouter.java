@@ -203,7 +203,38 @@ public final class BrowserUrlRouter {
         }
     }
 
+    private static boolean sanitizeIntent(Activity activity, Intent intent) {
+        int blocked = Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION;
+        intent.setFlags(intent.getFlags() & ~blocked);
+        intent.setClipData(null);
+        intent.setSourceBounds(null);
+        intent.setComponent(null);
+        intent.setSelector(null);
+        if (activity.getPackageName().equals(intent.getPackage())) {
+            return false;
+        }
+        Uri data = intent.getData();
+        if (data != null) {
+            String sc = data.getScheme();
+            if (sc != null) {
+                sc = sc.toLowerCase(Locale.ROOT);
+                if (sc.equals("file") || sc.equals("content") || sc.equals("javascript") || sc.equals("data")
+                        || sc.equals("blob") || sc.equals("filesystem")) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
     private static boolean launchIntent(Activity activity, BrowserView webView, Intent intent, String fallbackUrl) {
+        if (!sanitizeIntent(activity, intent)) {
+            Toast.makeText(activity, "URLを開けませんでした", Toast.LENGTH_SHORT).show();
+            return true;
+        }
         try {
             if (intent.resolveActivity(activity.getPackageManager()) != null) {
                 activity.startActivity(intent);
@@ -282,7 +313,7 @@ public final class BrowserUrlRouter {
 
     private static boolean loadFallback(Activity activity, BrowserView webView, String fallbackUrl) {
         String normalized = fallbackUrl.trim();
-        if (normalized.isEmpty()) {
+        if (normalized.isEmpty() || !isWebUrl(normalized)) {
             Toast.makeText(activity, "URLを開けませんでした", Toast.LENGTH_SHORT).show();
             return true;
         }
@@ -330,6 +361,7 @@ public final class BrowserUrlRouter {
         return "file".equals(scheme)
                 || "content".equals(scheme)
                 || "about".equals(scheme)
+                || "moz-extension".equals(scheme)
                 || "data".equals(scheme)
                 || "blob".equals(scheme)
                 || "javascript".equals(scheme)

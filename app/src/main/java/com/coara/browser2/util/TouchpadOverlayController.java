@@ -43,6 +43,7 @@ public final class TouchpadOverlayController {
             if (surfaceView != null) {
                 surfaceView.applyStickSettings(prefs);
             }
+            TouchpadController.setScreenTouchBlocked(TouchpadSettings.isScreenTouchBlocked(prefs));
             TouchpadController.setActive(true);
             return;
         }
@@ -115,6 +116,7 @@ public final class TouchpadOverlayController {
 
         content.addView(overlay, buildLayoutParams(activity, prefs));
         visible = true;
+        TouchpadController.setScreenTouchBlocked(TouchpadSettings.isScreenTouchBlocked(prefs));
         TouchpadController.setActive(true);
     }
 
@@ -226,6 +228,11 @@ public final class TouchpadOverlayController {
                 if (surfaceView != null) {
                     surfaceView.applyStickSettings(prefs);
                 }
+            }
+
+            @Override
+            public void onScreenTouchChanged() {
+                TouchpadController.setScreenTouchBlocked(TouchpadSettings.isScreenTouchBlocked(prefs));
             }
         });
     }
