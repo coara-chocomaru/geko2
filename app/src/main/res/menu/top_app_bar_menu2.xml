@@ -28,7 +28,8 @@
             <item android:id="@+id/action_zoom_toggle" android:title="ズーム" android:checkable="true" />
             <item android:id="@+id/action_negapoji" android:title="ネガポジ" />
             <item android:id="@+id/action_deskua" android:title="デスクトップ表示" android:checkable="true" />
-            <item android:id="@+id/action_translate" android:title="日本語に翻訳" />
+            <item android:id="@+id/action_translate" android:title="ページを翻訳" />
+            <item android:id="@+id/action_translate_settings" android:title="翻訳設定" />
         </menu>
     </item>
 
@@ -49,11 +50,14 @@
 
     <item android:title="ツール">
         <menu>
+            <item android:id="@+id/action_adblock" android:title="AdBlock" android:checkable="true" />
             <item android:id="@+id/action_Secret" android:title="シークレット解除" />
             <item android:id="@+id/action_pgdl" android:title="ページ保存" />
             <item android:id="@+id/action_basic_auth" android:title="basicモード" android:checkable="true" />
-            <item android:id="@+id/action_plugins" android:title="拡張機能" />
-            <item android:id="@+id/action_plugin_commands" android:title="拡張機能コマンド" />
+            <item android:id="@+id/action_plugins" android:title="拡張機能(プラグイン)" />
+            <item android:id="@+id/action_plugin_commands" android:title="プラグインコマンド" />
+            <item android:id="@+id/action_fx_addons" android:title="Firefox拡張機能" />
+            <item android:id="@+id/action_fx_actions" android:title="Firefox拡張機能の操作" />
             <item android:id="@+id/action_txtphoto" android:title="TXT→画像" />
             <item android:id="@+id/action_asciiart" android:title="画像→TXT" />
             <item android:id="@+id/action_htmlview" android:title="htmlview" />

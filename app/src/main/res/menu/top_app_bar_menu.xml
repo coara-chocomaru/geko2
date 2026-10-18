@@ -44,7 +44,8 @@
             <item android:id="@+id/action_zoom_toggle" android:title="ズーム" android:checkable="true" />
             <item android:id="@+id/action_negapoji" android:title="ネガポジ" />
             <item android:id="@+id/action_deskua" android:title="デスクトップ表示" android:checkable="true" />
-            <item android:id="@+id/action_translate" android:title="日本語に翻訳" />
+            <item android:id="@+id/action_translate" android:title="ページを翻訳" />
+            <item android:id="@+id/action_translate_settings" android:title="翻訳設定" />
             <item android:id="@+id/action_text_color" android:title="テキストカラー選択" />
             <item android:id="@+id/action_font_family" android:title="フォント切り替え" />
             <item android:id="@+id/action_background_settings" android:title="背景画像設定" />
@@ -70,12 +71,16 @@
 
     <item android:title="ツール">
         <menu>
+            <item android:id="@+id/action_adblock" android:title="AdBlock" android:checkable="true" app:showAsAction="never" />
             <item android:id="@+id/action_Secret" android:icon="@drawable/ic_dark_mode" android:title="シークレットモード" app:showAsAction="never" />
             <item android:id="@+id/action_pgdl" android:icon="@drawable/ic_page_download" android:title="ページ保存" app:showAsAction="never" />
+            <item android:id="@+id/action_site_third_party_cookies" android:title="サイト別サードパーティCookie" app:showAsAction="never" />
             <item android:id="@+id/action_export_all_cookies_zip" android:title="cookie保存" app:showAsAction="never" />
             <item android:id="@+id/action_basic_auth" android:icon="@drawable/ic_globe" android:title="basicモード" android:checkable="true" app:showAsAction="never" />
-            <item android:id="@+id/action_plugins" android:title="拡張機能" app:showAsAction="never" />
-            <item android:id="@+id/action_plugin_commands" android:title="拡張機能コマンド" app:showAsAction="never" />
+            <item android:id="@+id/action_plugins" android:title="拡張機能(プラグイン)" app:showAsAction="never" />
+            <item android:id="@+id/action_plugin_commands" android:title="プラグインコマンド" app:showAsAction="never" />
+            <item android:id="@+id/action_fx_addons" android:title="Firefox拡張機能" app:showAsAction="never" />
+            <item android:id="@+id/action_fx_actions" android:title="Firefox拡張機能の操作" app:showAsAction="never" />
             <item android:id="@+id/action_txtphoto" android:icon="@drawable/ic_txtphoto" android:title="TXT→画像" app:showAsAction="never" />
             <item android:id="@+id/action_asciiart" android:icon="@drawable/ic_asciiart" android:title="画像→TXT" app:showAsAction="never" />
             <item android:id="@+id/action_htmlview" android:icon="@drawable/ic_globe" android:title="htmlview" app:showAsAction="never" />
@@ -88,8 +93,6 @@
     <item android:title="保護・履歴消去">
         <menu>
             <item android:id="@+id/action_pin_settings" android:title="起動保護" />
-            <item android:id="@+id/action_Dhistory" android:title="ダウンロード履歴消去" />
-            <item android:id="@+id/action_clear_page_history" android:title="ページ履歴を消去" />
             <item android:id="@+id/action_clear_cookies" android:title="クッキーを消去" />
             <item android:id="@+id/action_clear_cache" android:title="キャッシュを消去" />
             <item android:id="@+id/action_clear_form_history" android:title="フォーム履歴を消去" />
