@@ -10,6 +10,10 @@
 
 -keep class com.coara.browser2.gecko.** { *; }
 
+-keep,allowoptimization public class com.coara.browser2.fx.FxExtensionsActivity {
+    public <init>(...);
+}
+
 -keep,allowoptimization public class com.coara.browser2.BrowserApplication {
     public <init>(...);
 }
@@ -23,10 +27,6 @@
 }
 
 -keep,allowoptimization public class com.coara.browser2.grepmd5appActivity {
-    public <init>(...);
-}
-
--keep,allowoptimization public class com.coara.browser2.exec {
     public <init>(...);
 }
 
@@ -85,3 +85,11 @@
 -keep,allowoptimization public class com.coara.browser2.SecretTouchpadActivity {
     public <init>(...);
 }
+
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+    public static int d(...);
+    public static int i(...);
+}
+
+-dontnote **
