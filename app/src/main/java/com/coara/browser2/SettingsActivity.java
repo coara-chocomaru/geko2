@@ -1,6 +1,8 @@
 package com.coara.browser2;
 
 import android.app.AlertDialog;
+import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -11,8 +13,12 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.coara.browser2.util.BrowserConstants;
+import com.coara.browser2.util.CookiePolicyUi;
+import com.coara.browser2.util.CookieSitePolicy;
 import com.coara.browser2.util.DeviceInfoProvider;
 import com.coara.browser2.util.TextFileReader;
+import com.coara.browser2.util.GeckoEngineInfo;
 
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -36,11 +42,40 @@ public class SettingsActivity extends AppCompatActivity {
         List<SettingItem> settingsList = new ArrayList<>();
         settingsList.add(new SettingItem("アプリ情報", "アプリの情報", this::openAppInfo));
         settingsList.add(new SettingItem("端末情報", "デバイスの基本情報を表示", this::showDeviceInfo));
+        settingsList.add(new SettingItem("Cookieのブロックと許可", cookieSummary(), this::showCookieDialog));
+        settingsList.add(new SettingItem("Gecko エンジン情報", "現在のエンジンバージョンと対応機能", this::showWebViewEngine));
         settingsList.add(new SettingItem("アプリバージョン", getAppVersion(), null));
         settingsList.add(new SettingItem("ライセンス", "ライセンス情報を表示", this::showLicense));
 
         adapter = new SettingsAdapter(settingsList);
         recyclerView.setAdapter(adapter);
+    }
+
+    private SharedPreferences browserPrefs() {
+        return getSharedPreferences(BrowserConstants.PREF_NAME, Context.MODE_PRIVATE);
+    }
+
+    private String cookieSummary() {
+        SharedPreferences prefs = browserPrefs();
+        int mode = CookieSitePolicy.mode(prefs);
+        int allowed = CookieSitePolicy.sites(prefs, true).size();
+        int blocked = CookieSitePolicy.sites(prefs, false).size();
+        String base;
+        if (mode == CookieSitePolicy.MODE_BLOCK_ALL) {
+            base = "クッキーを常にブロック&拒否中(すべてのCookieを保存・送信しません)";
+        } else if (mode == CookieSitePolicy.MODE_ALLOW_THIRD_PARTY) {
+            base = "サードパーティCookieを許可中(互換性優先・追跡されやすくなります)";
+        } else {
+            base = "サードパーティCookieをブロック中(推奨)";
+        }
+        if (mode != CookieSitePolicy.MODE_BLOCK_ALL && (allowed > 0 || blocked > 0)) {
+            base += "\nサイト別: 許可 " + allowed + " / ブロック " + blocked;
+        }
+        return base;
+    }
+
+    private void showCookieDialog() {
+        CookiePolicyUi.showGlobalDialog(this, browserPrefs(), this::recreate);
     }
 
     private String getAppVersion() {
@@ -53,6 +88,10 @@ public class SettingsActivity extends AppCompatActivity {
 
     private void showDeviceInfo() {
         showTextDialog("端末情報", DeviceInfoProvider.collectDeviceInfo());
+    }
+
+    private void showWebViewEngine() {
+        showTextDialog("Gecko エンジン情報", GeckoEngineInfo.collect(this));
     }
 
     private void showLicense() {

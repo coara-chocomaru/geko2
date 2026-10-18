@@ -116,7 +116,7 @@ public final class TouchpadSurfaceView extends View {
         stickOnLeft = onLeft;
         geometryWidth = -1;
         TouchpadController.setStickMode(mode);
-        invalidate();
+        postInvalidateOnAnimation();
     }
 
     private float dp(float value) {
@@ -199,7 +199,7 @@ public final class TouchpadSurfaceView extends View {
             stickSentY = vy;
             listener.onStick(vx, vy);
         }
-        invalidate();
+        postInvalidateOnAnimation();
     }
 
     private void releaseStick() {
@@ -212,7 +212,7 @@ public final class TouchpadSurfaceView extends View {
             stickSentY = 0f;
             listener.onStick(0f, 0f);
         }
-        invalidate();
+        postInvalidateOnAnimation();
     }
 
     private void reset() {
@@ -243,7 +243,7 @@ public final class TouchpadSurfaceView extends View {
             listener.onCancel();
         }
         reset();
-        invalidate();
+        postInvalidateOnAnimation();
     }
 
     @Override
@@ -283,7 +283,7 @@ public final class TouchpadSurfaceView extends View {
             buttonLastX = x;
             buttonLastY = y;
             buttonDragStarted = false;
-            invalidate();
+            postInvalidateOnAnimation();
             return;
         }
         if (inStickZone(x)) {
@@ -384,7 +384,7 @@ public final class TouchpadSurfaceView extends View {
             if (rightButtonId == NONE) {
                 buttonDragStarted = false;
             }
-            invalidate();
+            postInvalidateOnAnimation();
             return;
         }
         if (id == rightButtonId) {
@@ -393,7 +393,7 @@ public final class TouchpadSurfaceView extends View {
             if (leftButtonId == NONE) {
                 buttonDragStarted = false;
             }
-            invalidate();
+            postInvalidateOnAnimation();
             return;
         }
         if (id == mouseId) {

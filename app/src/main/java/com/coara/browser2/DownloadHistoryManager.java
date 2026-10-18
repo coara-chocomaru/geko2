@@ -67,6 +67,7 @@ public class DownloadHistoryManager {
                 JSONObject obj = new JSONObject();
                 obj.put("id", downloadId);
                 obj.put("fileName", fileName);
+                obj.put("addedAt", System.currentTimeMillis());
                 obj.put("filePath", filePath);
                 if (userAgent != null && !userAgent.isEmpty()) obj.put("userAgent", userAgent);
                 if (referer != null && !referer.isEmpty()) obj.put("referer", referer);
@@ -161,6 +162,7 @@ public class DownloadHistoryManager {
                     JSONObject obj = new JSONObject();
                     obj.put("id", downloadId);
                     obj.put("fileName", fileName == null ? "" : fileName);
+                    obj.put("addedAt", System.currentTimeMillis());
                     obj.put("filePath", filePath == null ? "" : filePath);
                     if (!DownloadSupport.isBlank(localUri)) {
                         obj.put("localUri", localUri);

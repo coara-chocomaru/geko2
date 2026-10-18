@@ -29,8 +29,11 @@ public class BrowserApplication extends Application {
         }
         installCrashLogger();
         com.coara.browser2.gecko.BrowserEngine.init(this);
+        com.coara.browser2.util.CookieSitePolicy.init(this);
         initializePlugins();
-        createDownloadNotificationChannel();
+        Thread channels = new Thread(this::createDownloadNotificationChannel, "coara-channels");
+        channels.setDaemon(true);
+        channels.start();
     }
 
     private void initializePlugins() {

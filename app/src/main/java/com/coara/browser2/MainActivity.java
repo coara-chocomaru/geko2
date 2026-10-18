@@ -80,17 +80,28 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.textfield.TextInputEditText;
 import com.coara.browser2.util.BrowserUrlRouter;
 import com.coara.browser2.util.BrowserAssetLoader;
+import com.coara.browser2.model.Bookmark;
+import com.google.android.material.snackbar.Snackbar;
+import com.coara.browser2.util.AdBlockEngine;
+import com.coara.browser2.util.BookmarkDialog;
+import com.coara.browser2.util.BookmarkStore;
+import com.coara.browser2.util.PageTranslator;
+import com.coara.browser2.util.TranslateSettingsDialog;
 import com.coara.browser2.webview.TabOverviewDialog;
 import com.coara.browser2.util.TabStateStore;
 import com.coara.browser2.util.SafeBrowsingSupport;
 import com.coara.browser2.util.TabHistoryStore;
 import com.coara.browser2.util.SwipeRefreshPolicy;
 import com.coara.browser2.util.BrowserConstants;
+import com.coara.browser2.util.CookiePolicyUi;
+import com.coara.browser2.util.CookieSitePolicy;
 import com.coara.browser2.util.BasicAuthManager;
 import com.coara.browser2.util.ExternalDownloadTabTracker;
 import com.coara.browser2.util.DownloadSupport;
 import com.coara.browser2.util.DownloadFallbackManager;
 import com.coara.browser2.util.UiThread;
+import com.coara.browser2.util.HistoryDialog;
+import com.coara.browser2.model.HistoryItem;
 import com.coara.browser2.plugin.PluginHost;
 import com.coara.browser2.plugin.PluginManagerActivity;
 import com.coara.browser2.plugin.PluginManager;
@@ -99,7 +110,9 @@ import com.coara.browser2.util.BackgroundWallpaper;
 import com.coara.browser2.util.BrowserVisualSettings;
 import com.coara.browser2.util.BrowserMenuController;
 import com.coara.browser2.util.BrowserThemeManager;
+import com.coara.browser2.util.FindInPageController;
 import com.coara.browser2.util.KeyboardSettings;
+import com.coara.browser2.util.NetworkStateGuard;
 import com.coara.browser2.util.TouchpadController;
 import com.coara.browser2.util.TouchpadOverlayController;
 import com.coara.browser2.util.TouchpadSettings;
@@ -167,10 +180,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     public static final String EXTRA_CLEAR_HISTORY = BrowserConstants.EXTRA_CLEAR_HISTORY;
     private static final long MAX_BACKGROUND_IMAGE_BYTES = 64L * 1024L * 1024L;
 
-    private View findInPageBarView;
-    private EditText etFindQuery;
-    private TextView tvFindCount;
-    private Button btnFindPrev, btnFindNext, btnFindClose;
     private ValueCallback<Boolean> pendingPermissionCallback = null;
     private ActivityResultLauncher<String[]> permissionRequestLauncher;
 
@@ -189,6 +198,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private FrameLayout webViewContainer;
     private TextView tabCountTextView;
     private ImageView copyButton;
+    private ImageView clearButton;
+    private ImageView urlSecurityIcon;
+    private android.widget.ProgressBar pageProgressBar;
     private ImageView backgroundImageView;
     private volatile int backgroundLoadToken = 0;
     private ActivityResultLauncher<Intent> fileChooserLauncher;
@@ -200,8 +212,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private final ArrayList<BrowserView> webViews = new ArrayList<>();
     private int currentTabIndex = 0;
     private int nextTabId = 0;
-    private int currentMatchIndex = 0;
-    private int totalMatches = 0;
     private final Set<BrowserView> externalTabs = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
     private final List<Bookmark> bookmarks = new ArrayList<>();
     private final List<HistoryItem> historyItems = Collections.synchronizedList(new ArrayList<>());
@@ -223,7 +233,8 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private boolean fullScreenActive = false;
     private BrowserView fullScreenView = null;
     private int fullScreenPreviousOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
-    private final Map<BrowserView, Bitmap> tabSnapshots = new HashMap<>();
+    private final Map<BrowserView, Bitmap> tabSnapshots = new LinkedHashMap<>();
+    private static final int MAX_MEMORY_SNAPSHOTS = 8;
     private final Map<BrowserView, Runnable> pendingSpaHistoryTasks = new HashMap<>();
     
     
@@ -283,35 +294,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     finish();
                 }
             });
-    public static class Bookmark {
-        private final String title;
-        private final String url;
-        public Bookmark(String title, String url) {
-            this.title = title;
-            this.url = url;
-        }
-        public String getTitle() { return title; }
-        public String getUrl() { return url; }
-    }
-
-    public static class HistoryItem {
-        private final String title;
-        private final String url;
-        private final long timestamp;
-
-        public HistoryItem(String title, String url) {
-            this(title, url, System.currentTimeMillis());
-        }
-
-        public HistoryItem(String title, String url, long timestamp) {
-            this.title = title;
-            this.url = url;
-            this.timestamp = timestamp;
-        }
-
-        public String getTitle() { return title; }
-        public String getUrl() { return url; }
-        public long getTimestamp() { return timestamp; }
+    static {
     }
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -341,7 +324,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         uaEnabled = pref.getBoolean(KEY_UA_ENABLED, false);
         deskuaEnabled = pref.getBoolean(KEY_DESKUA_ENABLED, false);
         final int maxMemory = (int)(Runtime.getRuntime().maxMemory() / 1024);
-        final int cacheSize = Math.max(1024, Math.min(maxMemory / 16, 8 * 1024));
+        final int cacheSize = Math.max(512, Math.min(maxMemory / 32, 4 * 1024));
         faviconCache = new LruCache<String, Bitmap>(cacheSize) {
             @Override
             protected int sizeOf(String key, Bitmap bitmap) {
@@ -357,6 +340,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         urlEditText.setImeOptions(EditorInfo.IME_ACTION_GO);
         KeyboardSettings.applyToEditor(urlEditText, pref);
         faviconImageView = findViewById(R.id.favicon);
+        setupBookmarkStar();
         btnGo = findViewById(R.id.btnGo);
         btnNewTab = findViewById(R.id.btnNewTab);
         swipeRefreshLayout = findViewById(R.id.swipeRefreshLayout);
@@ -399,11 +383,53 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             Toast.makeText(MainActivity.this, "URLをコピーしました", Toast.LENGTH_SHORT).show();
         });
         ViewGroup parentView = (ViewGroup) urlEditText.getParent();
-        FrameLayout.LayoutParams layoutParams = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        layoutParams.gravity = Gravity.END | Gravity.CENTER_VERTICAL;
-        copyButton.setLayoutParams(layoutParams);
+        urlSecurityIcon = findViewById(R.id.urlSecurityIcon);
+        pageProgressBar = findViewById(R.id.pageProgressBar);
+        int buttonSize = Math.round(36 * getResources().getDisplayMetrics().density);
+        int buttonPad = Math.round(8 * getResources().getDisplayMetrics().density);
+        android.util.TypedValue ripple = new android.util.TypedValue();
+        getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, ripple, true);
+        copyButton.setPadding(buttonPad, buttonPad, buttonPad, buttonPad);
+        copyButton.setBackgroundResource(ripple.resourceId);
+        copyButton.setContentDescription("URLをコピー");
+        copyButton.setLayoutParams(new LinearLayout.LayoutParams(buttonSize, buttonSize));
+        clearButton = new ImageView(this);
+        clearButton.setImageResource(R.drawable.ic_close);
+        clearButton.setAlpha(0.6f);
+        clearButton.setPadding(buttonPad, buttonPad, buttonPad, buttonPad);
+        clearButton.setBackgroundResource(ripple.resourceId);
+        clearButton.setContentDescription("入力を消去");
+        clearButton.setVisibility(View.GONE);
+        clearButton.setLayoutParams(new LinearLayout.LayoutParams(buttonSize, buttonSize));
+        clearButton.setOnClickListener(v -> {
+            urlEditText.setText("");
+            urlEditText.requestFocus();
+        });
+        parentView.addView(clearButton);
         parentView.addView(copyButton);
+        urlEditText.addTextChangedListener(new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+            }
+
+            @Override
+            public void afterTextChanged(android.text.Editable s) {
+                updateClearButton();
+            }
+        });
+        View.OnLongClickListener urlBarLongClick = v -> {
+            if (urlEditMode) {
+                return false;
+            }
+            showUrlBarMenu(v);
+            return true;
+        };
+        urlContainer.setOnLongClickListener(urlBarLongClick);
+        urlEditText.setOnLongClickListener(urlBarLongClick);
 
         urlEditText.setOnFocusChangeListener((v, hasFocus) -> {
             if (hasFocus) {
@@ -435,7 +461,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
         swipeRefreshLayout.setOnChildScrollUpCallback((parent1, child) -> {
             BrowserView current = getCurrentWebView();
-            if (current == null) return true;
+            if (current == null || TouchpadController.isScreenTouchBlocked()) return true;
             Boolean cached = pullToRefreshEligibleCache.get(current);
             if (cached == null) {
                 
@@ -538,6 +564,10 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
         @Override
         public void handleOnBackPressed() {
+        if (findController != null && findController.isShowing()) {
+            findController.hide();
+            return;
+        }
         if (urlEditMode || (urlEditText != null && urlEditText.hasFocus() && !KeyboardSettings.isAlwaysVisible(pref))) {
             exitUrlEditMode();
             return;
@@ -583,6 +613,30 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
     private Bundle loadBundleFromFile(String fileName) {
         return TabStateStore.loadBundleFromFile(getFilesDir(), fileName);
+    }
+
+    private com.coara.browser2.util.TabGroupStore tabGroupStore;
+
+    private com.coara.browser2.util.TabGroupStore getTabGroupStore() {
+        if (tabGroupStore == null) {
+            tabGroupStore = new com.coara.browser2.util.TabGroupStore(
+                    pref.getString("tab_groups_v1", ""),
+                    serialized -> pref.edit().putString("tab_groups_v1", serialized).apply());
+        }
+        return tabGroupStore;
+    }
+
+    private void pruneTabGroups() {
+        java.util.Set<Integer> live = new java.util.HashSet<>();
+        synchronized (webViews) {
+            for (BrowserView w : webViews) {
+                int id = getTabId(w);
+                if (id >= 0) {
+                    live.add(id);
+                }
+            }
+        }
+        getTabGroupStore().prune(live);
     }
 
     private int getTabId(BrowserView view) {
@@ -831,7 +885,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             if (sharedText != null && !sharedText.trim().isEmpty()) {
                 String extracted = extractUrlFromSharedText(sharedText.trim());
                 String url = BrowserUrlRouter.normalizeUserInput(extracted);
-                if (!url.isEmpty()) {
+                if (!url.isEmpty() && isSafeExternalLoadUrl(url)) {
                     createNewExternalTab(url);
                 }
             }
@@ -840,12 +894,17 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             String query = intent.getStringExtra(android.app.SearchManager.QUERY);
             if (query != null && !query.trim().isEmpty()) {
                 String url = BrowserUrlRouter.normalizeUserInput(query.trim());
-                if (!url.isEmpty()) {
+                if (!url.isEmpty() && isSafeExternalLoadUrl(url)) {
                     createNewExternalTab(url);
                 }
             }
             setIntent(new Intent());
         }
+    }
+
+    private static boolean isSafeExternalLoadUrl(String url) {
+        String lower = url.trim().toLowerCase(java.util.Locale.ROOT);
+        return lower.startsWith("http://") || lower.startsWith("https://");
     }
 
     private String extractUrlFromSharedText(String text) {
@@ -867,7 +926,17 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
     @Override
     protected void onResume() {
+        if (networkStateGuard == null) {
+            networkStateGuard = new NetworkStateGuard(this, () -> {
+                synchronized (webViews) {
+                    return new ArrayList<>(webViews);
+                }
+            });
+        }
+        networkStateGuard.start();
         super.onResume();
+        com.coara.browser2.fx.FxExtensionManager.get().setForeground(this);
+        com.coara.browser2.fx.FxExtensionManager.get().setTabHost(fxTabHost);
         BrowserThemeManager.applyToActivity(this);
         BrowserMenuController.refresh(this);
         TouchpadController.setCurrentWebView(getCurrentWebView());
@@ -879,6 +948,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 pluginReloadPending = true;
             }
         }
+        refreshThirdPartyCookiePolicy();
         resumeAllWebViewTimers();
         resumeCurrentWebView();
         if (urlEditMode) {
@@ -912,8 +982,12 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
     @Override
     protected void onPause() {
+        if (networkStateGuard != null) {
+            networkStateGuard.stop();
+        }
         TouchpadOverlayController.onHostPause(this);
         PluginRuntime.onHostPause(this);
+        com.coara.browser2.fx.FxExtensionManager.get().clearForeground(this);
         pauseCurrentWebView();
         pauseAllWebViewTimers();
         flushHistory();
@@ -938,6 +1012,11 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
     @Override
     protected void onDestroy() {
+        com.coara.browser2.fx.FxExtensionManager.get().clearTabHost(fxTabHost);
+        PageTranslator.release();
+        if (findController != null) {
+            findController.release();
+        }
         BrowserMenuController.restore(this);
         TouchpadOverlayController.hide(this);
         BasicAuthManager.cancelPendingForActivity(MainActivity.this);
@@ -1052,6 +1131,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             Bitmap bm = BitmapFactory.decodeFile(snapFile.getAbsolutePath(), snapOptions);
             if (bm != null) {
                 tabSnapshots.put(webView, bm);
+                trimSnapshotMemory(webView);
             }
             return bm;
         } catch (Exception e) {
@@ -1180,14 +1260,14 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 }
             }
             if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
-                synchronized (webViews) {
-                    if (!webViews.isEmpty()) {
-                        try {
-                            webViews.get(0).clearCache(false);
-                        } catch (Exception ignored) {
-                        }
+                if (faviconCache != null) {
+                    try {
+                        faviconCache.evictAll();
+                    } catch (Exception ignored) {
                     }
                 }
+                clearTabSnapshots();
+                clearBackgroundBitmap();
             }
         }
         if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
@@ -1334,7 +1414,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                                 }
                                 File outFile = new File(getFilesDir(), "tab_snapshot_" + finalIdForSnap + ".png");
                                 try (FileOutputStream fos = new FileOutputStream(outFile)) {
-                                    finalSnap.compress(Bitmap.CompressFormat.PNG, 80, fos);
+                                    finalSnap.compress(Bitmap.CompressFormat.JPEG, 75, fos);
                                     fos.flush();
                                 }
                             } catch (Exception ignored) {
@@ -1453,6 +1533,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 webViewContainer.addView(initialWebView);
                 initialWebView.loadUrl(START_PAGE);
             }
+            pruneTabGroups();
             updateTabCount();
         }
     }
@@ -1539,6 +1620,51 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             }
         }
     }
+    private int cookiePolicyStamp = Integer.MIN_VALUE;
+
+    private void applyCookieBehaviorFor(String url) {
+        int behavior;
+        if (CookieSitePolicy.blockAll(pref)) {
+            behavior = org.mozilla.geckoview.ContentBlocking.CookieBehavior.ACCEPT_NONE;
+        } else if (CookieSitePolicy.isAllowed(pref, url)) {
+            behavior = org.mozilla.geckoview.ContentBlocking.CookieBehavior.ACCEPT_ALL;
+        } else {
+            behavior = org.mozilla.geckoview.ContentBlocking.CookieBehavior.ACCEPT_FIRST_PARTY;
+        }
+        BrowserEngine.get().setCookieBehavior(behavior);
+    }
+
+    private void refreshThirdPartyCookiePolicy() {
+        int stamp = CookieSitePolicy.revision();
+        BrowserView current = getCurrentWebView();
+        if (current != null) {
+            PendingTab pending = pendingTabs.get(current);
+            applyCookieBehaviorFor(pending != null ? pending.url : current.getUrl());
+        } else {
+            applyCookieBehaviorFor(null);
+        }
+        cookiePolicyStamp = stamp;
+    }
+
+    private void showSiteThirdPartyCookieDialog() {
+        final BrowserView current = getCurrentWebView();
+        if (current == null) {
+            return;
+        }
+        final PendingTab pending = pendingTabs.get(current);
+        final String url = pending != null ? pending.url : current.getUrl();
+        if (CookieSitePolicy.hostOf(url).isEmpty() || !BrowserUrlRouter.isWebUrl(url)) {
+            Toast.makeText(this, "このページでは設定できません", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        CookiePolicyUi.showSiteDialog(this, pref, url, () -> {
+            refreshThirdPartyCookiePolicy();
+            if (pending == null) {
+                current.reload();
+            }
+        });
+    }
+
     private BrowserView createNewWebView() {
         final BrowserView webView = new BrowserView(this);
         KeyboardSettings.configureWebView(webView, pref);
@@ -1579,14 +1705,23 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
             @Override
             public void onPageStarted(BrowserView view, String url) {
+                PageTranslator.onPageStarted(view);
                 ExternalDownloadTabTracker.onPageStarted(view, url);
                 PluginRuntime.onPageStarted(view, url);
+                AdBlockEngine.onPageStarted(view);
+                if (view == getCurrentWebView()) {
+                    applyCookieBehaviorFor(url);
+                }
+                if (findController != null) {
+                    findController.onPageStarted(view);
+                }
                 TouchpadController.onPageStarted(view);
                 clearPendingSpaHistory(view);
                 if (view == getCurrentWebView()) {
                     urlEditText.setText(url);
                     updatePullToRefreshState(view, url);
                     showCachedFavicon(url);
+                    updateBookmarkStar();
                 }
             }
 
@@ -1616,9 +1751,13 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     url = "";
                 }
                 ExternalDownloadTabTracker.onPageFinished(view, url);
+                if (findController != null) {
+                    findController.onPageFinished(view);
+                }
                 PluginRuntime.onPageFinished(view, url);
                 TouchpadController.onPageFinished(view);
                 KeyboardSettings.configureWebView(view, pref);
+                PageTranslator.onPageFinished(view, true);
                 applyBrowserVisualSettings(view);
                 if (url.startsWith(BrowserConstants.APP_ASSET_BASE_URL)) {
                     BrowserThemeManager.applyToWebView(view, MainActivity.this);
@@ -1639,6 +1778,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     }
                 }
                 clearPendingSpaHistory(view);
+                if (view == getCurrentWebView()) {
+                    updateBookmarkStar();
+                }
                 boolean backNavigation = backNavigationTabs.remove(view);
                 mergeHistoryFromEngine(view, view.copyBackForwardList(), false);
                 if (!backNavigation) {
@@ -1837,6 +1979,19 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         });
     }
 
+    private final com.coara.browser2.fx.FxExtensionManager.TabHost fxTabHost = new com.coara.browser2.fx.FxExtensionManager.TabHost() {
+        @Override
+        public org.mozilla.geckoview.GeckoSession openExtensionTab(boolean active) {
+            BrowserView child = openPopupTab();
+            return child == null ? null : child.createChildSession();
+        }
+
+        @Override
+        public void openUrl(String url) {
+            openInNewTab(url);
+        }
+    };
+
     private BrowserView openPopupTab() {
         if (webViews.size() >= MAX_TABS) {
             Toast.makeText(this, "最大タブ数に達しました", Toast.LENGTH_SHORT).show();
@@ -1932,6 +2087,10 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         if (source == null || request == null || DownloadSupport.isBlank(request.url)) {
             return;
         }
+        if (com.coara.browser2.fx.FxExtensionManager.get().offerInstall(MainActivity.this, request.url, request.mimeType,
+                () -> startDownloadFromRequest(source, request))) {
+            return;
+        }
         long downloadId = startDownloadFromRequest(source, request);
         if (downloadId > 0 && ExternalDownloadTabTracker.isExternal(source)) {
             if (ExternalDownloadTabTracker.shouldCloseWhenDownloadStarts(source, request.url, request.contentDisposition, request.mimeType)) {
@@ -2004,7 +2163,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         synchronized (webViews) {
             int index = webViews.indexOf(crashed);
             if (index == -1) {
-                
                 try {
                     crashed.destroy();
                 } catch (Exception ignored) {
@@ -2028,11 +2186,16 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             pullToRefreshEligibleCache.remove(crashed);
             pendingTabs.remove(crashed);
 
-            if (wasCurrent) {
-                try {
-                    webViewContainer.removeView(crashed);
-                } catch (Exception ignored) {
+            try {
+                android.view.ViewParent parent = crashed.getParent();
+                if (parent instanceof ViewGroup) {
+                    ((ViewGroup) parent).removeView(crashed);
                 }
+            } catch (Exception ignored) {
+            }
+            try {
+                crashed.stopLoading();
+            } catch (Exception ignored) {
             }
             try {
                 crashed.destroy();
@@ -2559,6 +2722,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             }
 
             webViews.remove(index);
+            getTabGroupStore().remove(getTabId(webView));
             externalTabs.remove(webView);
             ExternalDownloadTabTracker.clear(webView);
             Bitmap bm = tabSnapshots.remove(webView);
@@ -2568,6 +2732,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 } catch (Exception ignored) {
                 }
             }
+            clearPendingSpaHistory(webView);
             pullToRefreshEligibleCache.remove(webView);
             pendingTabs.remove(webView);
             tabHistoryStates.remove(webView);
@@ -2772,16 +2937,41 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         }
     }
 
+    private void toggleAdBlock(MenuItem item) {
+        boolean enable = !AdBlockEngine.isEnabled();
+        AdBlockEngine.setEnabled(this, enable);
+        item.setChecked(enable);
+        Toast.makeText(this, "AdBlock " + (enable ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
+        BrowserView current = getCurrentWebView();
+        if (current != null) {
+            current.reload();
+        }
+    }
+
     private void exportBookmarksToFile() {
-        final String bookmarksJson = pref.getString(KEY_BOOKMARKS, "[]");
+        if (bookmarks.isEmpty()) {
+            Toast.makeText(this, "ブックマークがありません", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final String[] formats = {"JSON (バックアップ・復元用)", "HTML (Chrome等で取り込み可)"};
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("エクスポート形式")
+            .setItems(formats, (d, which) -> exportBookmarks(which == 1))
+            .setNegativeButton("キャンセル", null)
+            .show();
+    }
+
+    private void exportBookmarks(final boolean html) {
+        final String content = html ? BookmarkStore.toNetscapeHtml(bookmarks, BookmarkStore.loadExtraFolders(this)) : BookmarkStore.toJson(bookmarks);
         String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date());
-        final String fileName = timeStamp + "-bookmark.json";
+        final String fileName = timeStamp + (html ? "-bookmark.html" : "-bookmark.json");
+        final String mime = html ? "text/html" : "application/json";
         backgroundExecutor.execute(() -> {
             com.coara.browser2.util.PublicStorageWriter.Target target = null;
             try {
                 target = com.coara.browser2.util.PublicStorageWriter.openDownloadsTarget(
-                        MainActivity.this, fileName, "application/json");
-                target.outputStream.write(bookmarksJson.getBytes("UTF-8"));
+                        MainActivity.this, fileName, mime);
+                target.outputStream.write(content.getBytes("UTF-8"));
                 target.outputStream.flush();
                 com.coara.browser2.util.PublicStorageWriter.finish(MainActivity.this, target);
                 final String displayPath = target.displayPath;
@@ -2946,11 +3136,15 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             Toast.makeText(this, "最大タブ数に達しました", Toast.LENGTH_SHORT).show();
             return;
         }
+        int openerGroup = getTabGroupStore().groupOf(getTabId(getCurrentWebView()));
         BrowserView newWebView = createNewWebView();
         newWebView.setTag(nextTabId);
         nextTabId++;
         webViews.add(newWebView);
         tabHistoryStates.put(newWebView, new TabHistoryStore.State());
+        if (openerGroup >= 0) {
+            getTabGroupStore().assign(getTabId(newWebView), openerGroup);
+        }
         updateTabCount();
         switchToTab(webViews.size() - 1);
         newWebView.loadUrl(url);
@@ -2981,6 +3175,12 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             reloadTabNow(next);
         }
         webViewContainer.addView(next);
+        if (findController != null) {
+            findController.onTabSwitched(current);
+        }
+        if (pageProgressBar != null) {
+            pageProgressBar.setVisibility(View.INVISIBLE);
+        }
         try {
             next.onResume();
         } catch (Exception ignored) {
@@ -2993,6 +3193,8 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         urlEditText.setText(next.getUrl());
         showCachedFavicon(next.getUrl());
         updatePullToRefreshState(next, next.getUrl());
+        updateBookmarkStar();
+        refreshThirdPartyCookiePolicy();
     }
 
     private BrowserView getCurrentWebView() {
@@ -3045,6 +3247,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             KeyboardSettings.hideKeyboardForWebView(this, getCurrentWebView());
         }
         urlEditMode = true;
+        updateBookmarkStar();
         urlEditSavedIcon = faviconImageView != null ? faviconImageView.getDrawable() : null;
         if (faviconImageView != null) {
             faviconImageView.setImageResource(R.drawable.ic_close);
@@ -3068,6 +3271,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             }
             copyButton.setVisibility(View.VISIBLE);
         }
+        updateClearButton();
         if (urlContainer != null) {
             urlEditOriginalStrokeColor = urlContainer.getStrokeColor();
             urlEditOriginalStrokeWidth = urlContainer.getStrokeWidth();
@@ -3086,7 +3290,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private void exitUrlEditMode() {
         if (!urlEditMode) return;
         urlEditMode = false;
+        updateBookmarkStar();
         if (copyButton != null) copyButton.setVisibility(View.GONE);
+        if (clearButton != null) clearButton.setVisibility(View.GONE);
         if (btnNewTab != null) btnNewTab.setVisibility(View.VISIBLE);
         if (tabCountTextView != null) tabCountTextView.setVisibility(View.VISIBLE);
         if (faviconImageView != null) {
@@ -3157,6 +3363,18 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         if (imgItem != null) imgItem.setChecked(imgBlockEnabled);
         MenuItem basicAuthItem = menu.findItem(R.id.action_basic_auth);
         if (basicAuthItem != null) basicAuthItem.setChecked(basicAuthEnabled);
+        MenuItem adBlockItem = menu.findItem(R.id.action_adblock);
+        if (adBlockItem != null) {
+            adBlockItem.setChecked(AdBlockEngine.isEnabled());
+            adBlockItem.setTitle(AdBlockEngine.menuTitle());
+        }
+        MenuItem addBookmarkItem = menu.findItem(R.id.action_add_bookmark);
+        if (addBookmarkItem != null) {
+            BrowserView currentView = getCurrentWebView();
+            String currentUrl = currentView != null ? currentView.getUrl() : null;
+            boolean bookmarked = currentUrl != null && isBookmarkedUrl(currentUrl);
+            addBookmarkItem.setTitle(bookmarked ? "ブックマークを編集" : "ブックマーク登録");
+        }
         MenuItem offscreenPreRasterItem = menu.findItem(R.id.action_offscreen_pre_raster);
         if (offscreenPreRasterItem != null) {
             offscreenPreRasterItem.setChecked(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
@@ -3173,6 +3391,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         int id = item.getItemId();
         if (id == R.id.action_tabs) {
             showTabsDialog();
+        } else if (id == R.id.action_adblock) {
+            toggleAdBlock(item);
+            return true;
         } else if (id == R.id.action_text_color) {
             showTextColorDialog();
             return true;
@@ -3219,6 +3440,11 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             startActivity(new Intent(MainActivity.this, PluginManagerActivity.class));
         } else if (id == R.id.action_plugin_commands) {
             showPluginCommands();
+        } else if (id == R.id.action_fx_addons) {
+            startActivity(new Intent(MainActivity.this, com.coara.browser2.fx.FxExtensionsActivity.class));
+        } else if (id == R.id.action_fx_actions) {
+            BrowserView fxView = getCurrentWebView();
+            com.coara.browser2.fx.FxActionsDialog.show(this, fxView == null ? null : fxView.getGeckoSession());
         } else if (id == R.id.action_downloads) {
             startActivity(new Intent(MainActivity.this, DownloadHistoryActivity.class));
         } else if (id == R.id.action_qr) {
@@ -3319,6 +3545,15 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 Toast.makeText(MainActivity.this, "Basic認証 OFF", Toast.LENGTH_SHORT).show();
             }
             invalidateOptionsMenu();
+        } else if (id == R.id.action_clear_cookies) {
+            showClearCookiesDialog();
+            return true;
+        } else if (id == R.id.action_clear_cache) {
+            showClearCacheDialog();
+            return true;
+        } else if (id == R.id.action_clear_form_history) {
+            showClearFormHistoryDialog();
+            return true;
         } else if (id == R.id.action_clear_history) {
             clearAllBrowsingData();
             urlEditText.setInputType(EditorInfo.TYPE_CLASS_TEXT | EditorInfo.TYPE_TEXT_VARIATION_URI | EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
@@ -3335,21 +3570,32 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         } else if (id == R.id.action_translate) {
             translatePageToJapanese();
             return true;
+        } else if (id == R.id.action_translate_settings) {
+            TranslateSettingsDialog.show(this, false);
+            return true;
         } else if (id == R.id.action_clear_tabs) {
             clearTabs();
         } else if (id == R.id.action_screenshot) {
             takeScreenshot();
+        } else if (id == R.id.action_site_third_party_cookies) {
+            showSiteThirdPartyCookieDialog();
+            return true;
         } else if (id == R.id.action_export_all_cookies_zip) {
-            ArrayList<BrowserView> tabList;
-            ArrayList<String> urlList = new ArrayList<>();
-            synchronized (webViews) {
-                tabList = new ArrayList<>(webViews);
-                for (BrowserView tab : tabList) {
-                    PendingTab pending = pendingTabs.get(tab);
-                    urlList.add(pending != null ? pending.url : tab.getUrl());
-                }
-            }
-            exportAllTabCookies(urlList);
+            new AlertDialog.Builder(this)
+                    .setTitle("全タブのCookieを書き出しますか?")
+                    .setMessage("出力されるzipにはログイン状態(セッション)を再現できるCookieが含まれます。他人に渡すとアカウントを乗っ取られる恐れがあります。保存先はダウンロードフォルダです。")
+                    .setPositiveButton("書き出す", (dialog, which) -> {
+                        ArrayList<String> urlList = new ArrayList<>();
+                        synchronized (webViews) {
+                            for (BrowserView tab : webViews) {
+                                PendingTab pending = pendingTabs.get(tab);
+                                urlList.add(pending != null ? pending.url : tab.getUrl());
+                            }
+                        }
+                        exportAllTabCookies(urlList);
+                    })
+                    .setNegativeButton("キャンセル", null)
+                    .show();
             return true;
         }
         return super.onOptionsItemSelected(item);
@@ -3371,19 +3617,12 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     }
 
     private void translatePageToJapanese() {
-        String currentUrl = getCurrentWebView().getUrl();
-        if (currentUrl == null || currentUrl.isEmpty()) {
+        BrowserView target = getCurrentWebView();
+        if (target == null) {
             Toast.makeText(MainActivity.this, "翻訳するページが見つかりません", Toast.LENGTH_SHORT).show();
             return;
         }
-        try {
-            String encodedUrl = URLEncoder.encode(currentUrl, "UTF-8");
-            String translateUrl = "https://translate.google.com/translate?hl=ja&sl=auto&tl=ja&u=" + encodedUrl;
-            getCurrentWebView().loadUrl(translateUrl);
-        } catch (UnsupportedEncodingException e) {
-            Toast.makeText(MainActivity.this, "翻訳中にエラーが発生しました", Toast.LENGTH_SHORT).show();
-            e.printStackTrace();
-        }
+        PageTranslator.toggle(target, true);
     }
 
     private void applyNegapoji() {
@@ -3435,6 +3674,61 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             view.reloadForSettings();
         } catch (Exception ignored) {
         }
+    }
+
+    private void showClearCookiesDialog() {
+        new AlertDialog.Builder(MainActivity.this)
+                .setTitle("クッキーを消去")
+                .setMessage("一時クッキーを全て消しますか？")
+                .setNegativeButton("はい", (dialog, which) -> {
+                    try {
+                        BrowserEngine.get().clearCookies().accept(
+                                value -> Toast.makeText(MainActivity.this, "クッキーを消去しました", Toast.LENGTH_SHORT).show(),
+                                error -> Toast.makeText(MainActivity.this, "クッキーを消去できませんでした", Toast.LENGTH_SHORT).show());
+                    } catch (Exception e) {
+                        Toast.makeText(MainActivity.this, "クッキーを消去できませんでした", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setPositiveButton("いいえ", null)
+                .show();
+    }
+
+    private void showClearCacheDialog() {
+        new AlertDialog.Builder(MainActivity.this)
+                .setTitle("キャッシュを消去")
+                .setMessage("一時キャッシュを全て消しますか？")
+                .setNegativeButton("はい", (dialog, which) -> {
+                    try {
+                        BrowserEngine.get().clearCaches().accept(
+                                value -> Toast.makeText(MainActivity.this, "キャッシュを消去しました", Toast.LENGTH_SHORT).show(),
+                                error -> Toast.makeText(MainActivity.this, "キャッシュを消去できませんでした", Toast.LENGTH_SHORT).show());
+                    } catch (Exception e) {
+                        Toast.makeText(MainActivity.this, "キャッシュを消去できませんでした", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setPositiveButton("いいえ", null)
+                .show();
+    }
+
+    private void showClearFormHistoryDialog() {
+        new AlertDialog.Builder(MainActivity.this)
+                .setTitle("フォーム履歴を消去")
+                .setMessage("フォームの入力履歴を全て消しますか？")
+                .setNegativeButton("はい", (dialog, which) -> {
+                    ArrayList<BrowserView> all;
+                    synchronized (webViews) {
+                        all = new ArrayList<>(webViews);
+                    }
+                    for (BrowserView view : all) {
+                        try {
+                            view.clearFormData();
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    Toast.makeText(MainActivity.this, "フォーム履歴を消去しました", Toast.LENGTH_SHORT).show();
+                })
+                .setPositiveButton("いいえ", null)
+                .show();
     }
 
     private void reloadTabsForSettings() {
@@ -3688,134 +3982,49 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         Toast.makeText(MainActivity.this, "画像ブロック無効", Toast.LENGTH_SHORT).show();
         reloadTabsForSettings();
     }
+    private FindInPageController findController;
+    private NetworkStateGuard networkStateGuard;
+
+    private FindInPageController findController() {
+        if (findController == null) {
+            findController = new FindInPageController(this, pref, this::getCurrentWebView);
+        }
+        return findController;
+    }
 
     private void showFindInPageBar() {
-    if (findInPageBarView == null) {
-        LayoutInflater inflater = LayoutInflater.from(this);
-        findInPageBarView = inflater.inflate(R.layout.find_in_page_bar, null);
-        etFindQuery = findInPageBarView.findViewById(R.id.etFindQuery);
-        tvFindCount = findInPageBarView.findViewById(R.id.tvFindCount);
-        btnFindPrev = findInPageBarView.findViewById(R.id.btnFindPrev);
-        btnFindNext = findInPageBarView.findViewById(R.id.btnFindNext);
-        btnFindClose = findInPageBarView.findViewById(R.id.btnFindClose);
+        findController().show();
+    }
 
-        etFindQuery.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
-        KeyboardSettings.applyToEditor(etFindQuery, pref);
-        etFindQuery.setOnEditorActionListener(new TextView.OnEditorActionListener() {
-            @Override
-            public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
-                if (actionId == EditorInfo.IME_ACTION_SEARCH) {
-                    performFindInPage();
-                    return true;
-                }
-                return false;
-            }
-        });
-        etFindQuery.setOnKeyListener(new View.OnKeyListener() {
-            @Override
-            public boolean onKey(View v, int keyCode, KeyEvent event) {
-                if (keyCode == KeyEvent.KEYCODE_ENTER && event.getAction() == KeyEvent.ACTION_DOWN) {
-                    performFindInPage();
-                    return true;
-                }
-                return false;
-            }
-        });
+    private void hideFindInPageBar() {
+        findController().hide();
+    }
 
-        btnFindNext.setOnClickListener(new View.OnClickListener() {
+    private void showHistoryDialog() {
+        HistoryDialog.show(this, historyItems, new HistoryDialog.Host() {
             @Override
-            public void onClick(View v) {
-                if (totalMatches > 0) {
-                    getCurrentWebView().findNext(true, findCallback);
-                }
+            public Bitmap favicon(String url) {
+                return getFaviconBitmap(url);
             }
-        });
-        btnFindPrev.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (totalMatches > 0) {
-                    getCurrentWebView().findNext(false, findCallback);
-                }
-            }
-        });
-        btnFindClose.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                etFindQuery.setText("");
-                hideFindInPageBar();
-            }
-        });
 
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP);
-        addContentView(findInPageBarView, params);
-    }
-    findInPageBarView.setVisibility(View.VISIBLE);
-    etFindQuery.requestFocus();
-    InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-    if (imm != null) {
-        imm.showSoftInput(etFindQuery, InputMethodManager.SHOW_IMPLICIT);
-    }
-}
-private void performFindInPage() {
-    String query = etFindQuery.getText().toString().trim();
-    if (query.isEmpty()) {
-        getCurrentWebView().clearMatches();
-        tvFindCount.setText("0/0");
-        totalMatches = 0;
-        return;
-    }
-    
-    getCurrentWebView().clearMatches();
-    currentMatchIndex = 0;
-    getCurrentWebView().findAllAsync(query, findCallback);
-}
-private final BrowserView.FindCallback findCallback = new BrowserView.FindCallback() {
-    @Override
-    public void onFindResult(int activeIndex, int total) {
-        currentMatchIndex = activeIndex;
-        totalMatches = total;
-        runOnUiThread(new Runnable() {
             @Override
-            public void run() {
-                if (tvFindCount == null) {
-                    return;
-                }
-                if (totalMatches > 0) {
-                    tvFindCount.setText((currentMatchIndex + 1) + "/" + totalMatches);
-                } else {
-                    tvFindCount.setText("0/0");
+            public void open(String url) {
+                BrowserView current = getCurrentWebView();
+                if (current != null) {
+                    current.loadUrl(url);
                 }
             }
+
+            @Override
+            public void copy(String url) {
+                copyLink(url);
+            }
+
+            @Override
+            public void changed() {
+                saveHistory();
+            }
         });
-    }
-};
-private void hideFindInPageBar() {
-    if (findInPageBarView != null) {
-        findInPageBarView.setVisibility(View.GONE);
-        getCurrentWebView().clearMatches();
-        if (tvFindCount != null) {
-            tvFindCount.setText("0/0");
-        }
-        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-        if (imm != null) {
-            imm.hideSoftInputFromWindow(etFindQuery.getWindowToken(), 0);
-        }
-    }
-}
-private void showHistoryDialog() {
-        RecyclerView recyclerView = new RecyclerView(this);
-        recyclerView.setLayoutManager(new LinearLayoutManager(this));
-        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
-            .setTitle("履歴")
-            .setPositiveButton("閉じる", null)
-            .setView(recyclerView)
-            .create();
-        HistoryAdapter adapter = new HistoryAdapter(historyItems, dialog);
-        recyclerView.setAdapter(adapter);
-        dialog.show();
     }
 
     
@@ -3875,6 +4084,16 @@ private void showHistoryDialog() {
                     @Override
                     public int getCurrentTabIndex() {
                         return currentTabIndex;
+                    }
+
+                    @Override
+                    public com.coara.browser2.util.TabGroupStore getGroupStore() {
+                        return getTabGroupStore();
+                    }
+
+                    @Override
+                    public int getTabId(BrowserView webView) {
+                        return MainActivity.this.getTabId(webView);
                     }
 
                     @Override
@@ -4027,63 +4246,243 @@ private void showHistoryDialog() {
         UiThread.mainHandler().postDelayed(task, delayMs);
     }
 
-    private void showBookmarksManagementDialog() {
-        if (bookmarks.isEmpty()) {
-            Toast.makeText(this, "ブックマークがありません", Toast.LENGTH_SHORT).show();
+    private void trimSnapshotMemory(BrowserView keep) {
+        if (tabSnapshots.size() <= MAX_MEMORY_SNAPSHOTS) {
             return;
         }
-        RecyclerView recyclerView = new RecyclerView(this);
-        recyclerView.setLayoutManager(new LinearLayoutManager(this));
-        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
-            .setTitle("ブックマーク")
-            .setNegativeButton("閉じる", null)
-            .setView(recyclerView)
-            .create();
-        BookmarkAdapter adapter = new BookmarkAdapter(bookmarks, true, dialog);
-        recyclerView.setAdapter(adapter);
-        dialog.show();
+        java.util.Iterator<Map.Entry<BrowserView, Bitmap>> it = tabSnapshots.entrySet().iterator();
+        while (it.hasNext() && tabSnapshots.size() > MAX_MEMORY_SNAPSHOTS) {
+            Map.Entry<BrowserView, Bitmap> entry = it.next();
+            BrowserView owner = entry.getKey();
+            if (owner == keep || dirtySnapshotTabs.contains(owner)) {
+                continue;
+            }
+            it.remove();
+        }
     }
 
-    private void showEditBookmarkDialog(final int position, final BookmarkAdapter adapter) {
-        Bookmark bm = bookmarks.get(position);
-        View editView = LayoutInflater.from(this).inflate(R.layout.dialog_edit_bookmark, null);
-        EditText etTitle = editView.findViewById(R.id.editTitle);
-        EditText etUrl = editView.findViewById(R.id.editUrl);
-        etTitle.setText(bm.getTitle());
-        etUrl.setText(bm.getUrl());
-        new MaterialAlertDialogBuilder(MainActivity.this)
-            .setTitle("ブックマーク")
-            .setView(editView)
-            .setPositiveButton("保存", (dialog, which) -> {
-                String newTitle = etTitle.getText().toString().trim();
-                String newUrl = etUrl.getText().toString().trim();
-                if (!newUrl.startsWith("http://") && !newUrl.startsWith("https://")) {
-                    newUrl = "http://" + newUrl;
+    private final BookmarkDialog.Host bookmarkHost = new BookmarkDialog.Host() {
+        @Override
+        public Bitmap favicon(String url) {
+            return getFaviconBitmap(url);
+        }
+
+        @Override
+        public void open(String url) {
+            BrowserView current = getCurrentWebView();
+            if (current != null) {
+                current.loadUrl(url);
+            }
+        }
+
+        @Override
+        public void openInNewTab(String url) {
+            createNewTab(url);
+        }
+
+        @Override
+        public void changed() {
+            saveBookmarks();
+        }
+    };
+
+    private ImageView bookmarkStarView;
+
+    private void setupBookmarkStar() {
+        bookmarkStarView = findViewById(R.id.bookmarkStar);
+        if (bookmarkStarView == null) {
+            return;
+        }
+        bookmarkStarView.setOnClickListener(v -> {
+            addBookmark();
+            updateBookmarkStar();
+        });
+        bookmarkStarView.setOnLongClickListener(v -> {
+            showBookmarksManagementDialog();
+            return true;
+        });
+    }
+
+    private void updateClearButton() {
+        if (clearButton == null) {
+            return;
+        }
+        boolean show = urlEditMode && urlEditText != null && urlEditText.length() > 0;
+        clearButton.setVisibility(show ? View.VISIBLE : View.GONE);
+    }
+
+    private void updateUrlSecurityIcon() {
+        if (urlSecurityIcon == null) {
+            return;
+        }
+        BrowserView current = getCurrentWebView();
+        String url = current != null ? current.getUrl() : null;
+        if (urlEditMode || url == null) {
+            urlSecurityIcon.setVisibility(View.GONE);
+            return;
+        }
+        String lower = url.toLowerCase(Locale.ROOT);
+        if (lower.startsWith("https://")) {
+            urlSecurityIcon.setImageResource(R.drawable.ic_lock_small);
+            urlSecurityIcon.setContentDescription("保護された通信");
+            urlSecurityIcon.setVisibility(View.VISIBLE);
+        } else if (lower.startsWith("http://")) {
+            urlSecurityIcon.setImageResource(R.drawable.ic_warning_small);
+            urlSecurityIcon.setContentDescription("保護されていない通信");
+            urlSecurityIcon.setVisibility(View.VISIBLE);
+        } else {
+            urlSecurityIcon.setVisibility(View.GONE);
+        }
+    }
+
+    private void showUrlBarMenu(View anchor) {
+        final BrowserView current = getCurrentWebView();
+        final String url = current != null ? current.getUrl() : null;
+        android.widget.PopupMenu menu = new android.widget.PopupMenu(this, anchor);
+        menu.getMenu().add(0, 1, 1, "URLをコピー").setEnabled(url != null && !url.isEmpty());
+        menu.getMenu().add(0, 2, 2, "貼り付けて移動");
+        menu.getMenu().add(0, 3, 3, "URLを共有").setEnabled(url != null && !url.isEmpty());
+        menu.setOnMenuItemClickListener(item -> {
+            int id = item.getItemId();
+            if (id == 1) {
+                ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null && url != null) {
+                    cm.setPrimaryClip(ClipData.newPlainText("URL", url));
+                    Toast.makeText(MainActivity.this, "URLをコピーしました", Toast.LENGTH_SHORT).show();
                 }
-                bookmarks.set(position, new Bookmark(newTitle, newUrl));
-                saveBookmarks();
-                adapter.notifyDataSetChanged();
-                Toast.makeText(MainActivity.this, "保存しました", Toast.LENGTH_SHORT).show();
-            })
-            .setNegativeButton("キャンセル", null)
-            .show();
+                return true;
+            }
+            if (id == 2) {
+                ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                CharSequence text = null;
+                if (cm != null && cm.hasPrimaryClip() && cm.getPrimaryClip() != null && cm.getPrimaryClip().getItemCount() > 0) {
+                    text = cm.getPrimaryClip().getItemAt(0).coerceToText(MainActivity.this);
+                }
+                if (text == null || text.toString().trim().isEmpty()) {
+                    Toast.makeText(MainActivity.this, "クリップボードが空です", Toast.LENGTH_SHORT).show();
+                } else {
+                    urlEditText.setText(text.toString().trim());
+                    loadUrl();
+                }
+                return true;
+            }
+            if (id == 3 && url != null) {
+                try {
+                    Intent send = new Intent(Intent.ACTION_SEND);
+                    send.setType("text/plain");
+                    send.putExtra(Intent.EXTRA_TEXT, url);
+                    startActivity(Intent.createChooser(send, "共有"));
+                } catch (Exception ignored) {
+                }
+                return true;
+            }
+            return false;
+        });
+        menu.show();
+    }
+
+    private void updateBookmarkStar() {
+        updateUrlSecurityIcon();
+        if (bookmarkStarView == null) {
+            return;
+        }
+        BrowserView current = getCurrentWebView();
+        String url = current != null ? current.getUrl() : null;
+        boolean usable = url != null && !url.isEmpty() && !url.equals(START_PAGE) && !urlEditMode;
+        if (!usable) {
+            bookmarkStarView.setVisibility(View.GONE);
+            return;
+        }
+        boolean bookmarked = isBookmarkedUrl(url);
+        bookmarkStarView.setImageResource(bookmarked ? R.drawable.ic_star_filled : R.drawable.ic_star_outline);
+        bookmarkStarView.setVisibility(View.VISIBLE);
+    }
+
+    private void showBookmarksManagementDialog() {
+        BookmarkDialog.show(this, bookmarks, pref, bookmarkHost);
     }
 
     private void addBookmark() {
-        String currentUrl = getCurrentWebView().getUrl();
-        String title = getCurrentWebView().getTitle();
-        if (currentUrl != null && !currentUrl.isEmpty()) {
-            bookmarks.add(new Bookmark(title, currentUrl));
-            saveBookmarks();
-            Toast.makeText(MainActivity.this, "ブックマークを追加しました", Toast.LENGTH_SHORT).show();
+        BrowserView current = getCurrentWebView();
+        String currentUrl = current != null ? current.getUrl() : null;
+        if (currentUrl == null || currentUrl.isEmpty()) {
+            Toast.makeText(this, "追加できるページがありません", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        int existing = BookmarkStore.indexOfUrl(bookmarks, currentUrl);
+        if (existing >= 0) {
+            BookmarkDialog.showEditor(this, bookmarks, existing, bookmarkHost, null);
+            return;
+        }
+        String title = current.getTitle();
+        if (title == null || title.trim().isEmpty()) {
+            title = BookmarkStore.hostOf(currentUrl);
+        }
+        final String defaultFolder = BookmarkStore.getDefaultFolder(this);
+        final Bookmark added = new Bookmark(title.trim(), currentUrl, defaultFolder);
+        bookmarks.add(added);
+        saveBookmarks();
+        prefetchFavicons(java.util.Collections.singletonList(added));
+        try {
+            Snackbar.make(findViewById(android.R.id.content),
+                defaultFolder.isEmpty() ? "ブックマークに追加しました" : "「" + defaultFolder + "」に追加しました", Snackbar.LENGTH_LONG)
+                .setAction("編集", v -> BookmarkDialog.showEditor(this, bookmarks,
+                    BookmarkStore.indexOfInstance(bookmarks, added), bookmarkHost, null))
+                .show();
+        } catch (Exception e) {
+            Toast.makeText(this, "ブックマークを追加しました", Toast.LENGTH_SHORT).show();
         }
     }
 
+    private void prefetchFavicons(final List<Bookmark> targets) {
+        final List<String> urls = new ArrayList<>();
+        for (Bookmark b : targets) {
+            if (urls.size() >= 50) {
+                break;
+            }
+            urls.add(b.getUrl());
+        }
+        backgroundExecutor.execute(() -> {
+            for (String url : urls) {
+                File cached = new File(new File(getFilesDir(), "favicons"), getFaviconFilename(url));
+                if (cached.exists()) {
+                    continue;
+                }
+                Bitmap favicon = fetchFavicon(url);
+                if (favicon != null) {
+                    runOnUiThread(() -> faviconCache.put(url, favicon));
+                    saveFaviconToFile(url, favicon);
+                }
+            }
+        });
+    }
+
+    private java.util.HashSet<String> bookmarkKeyCache;
+    private int bookmarkKeyCacheSize = -1;
+
+    private boolean isBookmarkedUrl(String url) {
+        if (bookmarkKeyCache == null || bookmarkKeyCacheSize != bookmarks.size()) {
+            java.util.HashSet<String> keys = new java.util.HashSet<>(Math.max(16, bookmarks.size() * 2));
+            for (Bookmark b : bookmarks) {
+                keys.add(BookmarkStore.normalizeUrl(b.getUrl()));
+            }
+            bookmarkKeyCache = keys;
+            bookmarkKeyCacheSize = bookmarks.size();
+        }
+        String key = BookmarkStore.normalizeUrl(url);
+        return !key.isEmpty() && bookmarkKeyCache.contains(key);
+    }
+
     private void loadBookmarks() {
+        bookmarkKeyCache = null;
         bookmarks.clear();
         String jsonStr = pref.getString(KEY_BOOKMARKS, "[]");
-        if (!jsonStr.isEmpty()) {
-            parseAndAddBookmarks(jsonStr);
+        if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+                bookmarks.addAll(BookmarkStore.parseJson(jsonStr));
+            } catch (JSONException e) {
+                e.printStackTrace();
+            }
         }
     }
     private final ActivityResultLauncher<Intent> filePickerLauncher =
@@ -4104,28 +4503,58 @@ private void showHistoryDialog() {
             }
         });
     private void importBookmarksFromFile() {
-    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.setType("*/*");
-    } else {
-        intent.setType("application/json");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {
+            "application/json", "text/html", "text/plain", "application/octet-stream"
+        });
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        filePickerLauncher.launch(intent);
     }
-    intent.addCategory(Intent.CATEGORY_OPENABLE);
-    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-    filePickerLauncher.launch(intent);
-    }
+
     private void handleFileImport(Uri uri) {
-    try {
-        String json = readTextFromUri(uri);
-        parseAndImportBookmarks(json);
-        Toast.makeText(MainActivity.this, "ブックマークをインポートしました", Toast.LENGTH_SHORT).show();
-    } catch (IOException e) {
-        Toast.makeText(MainActivity.this, "ファイルの読み取りに失敗しました: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-        e.printStackTrace();
-    } catch (JSONException e) {
-        Toast.makeText(MainActivity.this, "JSON解析エラー: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-        e.printStackTrace();
-      }
+        try {
+            String text = readTextFromUri(uri);
+            List<Bookmark> incoming = BookmarkStore.looksLikeHtml(text)
+                ? BookmarkStore.parseNetscapeHtml(text)
+                : BookmarkStore.parseJson(text);
+            if (incoming.isEmpty()) {
+                Toast.makeText(MainActivity.this, "取り込めるブックマークがありません", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            confirmBookmarkImport(incoming);
+        } catch (IOException e) {
+            Toast.makeText(MainActivity.this, "ファイルの読み取りに失敗しました: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            e.printStackTrace();
+        } catch (JSONException e) {
+            Toast.makeText(MainActivity.this, "JSON解析エラー: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            e.printStackTrace();
+        }
+    }
+
+    private void confirmBookmarkImport(final List<Bookmark> incoming) {
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("ブックマークをインポート")
+            .setMessage(incoming.size() + "件を読み込みました。\n現在のブックマーク: " + bookmarks.size() + "件")
+            .setPositiveButton("追加(重複は除外)", (d, w) -> {
+                List<Bookmark> before = new ArrayList<>(bookmarks);
+                int added = BookmarkStore.merge(bookmarks, incoming);
+                saveBookmarks();
+                List<Bookmark> fresh = new ArrayList<>(bookmarks);
+                fresh.removeAll(before);
+                prefetchFavicons(fresh);
+                Toast.makeText(MainActivity.this, added + "件を追加しました", Toast.LENGTH_SHORT).show();
+            })
+            .setNeutralButton("すべて置き換え", (d, w) -> {
+                bookmarks.clear();
+                BookmarkStore.merge(bookmarks, incoming);
+                saveBookmarks();
+                prefetchFavicons(bookmarks);
+                Toast.makeText(MainActivity.this, bookmarks.size() + "件に置き換えました", Toast.LENGTH_SHORT).show();
+            })
+            .setNegativeButton("キャンセル", null)
+            .show();
     }
     private String readTextFromUri(Uri uri) throws IOException {
     StringBuilder builder = new StringBuilder();
@@ -4138,60 +4567,10 @@ private void showHistoryDialog() {
        }
        return builder.toString();
       }
-    private void parseAndImportBookmarks(String jsonStr) throws JSONException {
-        JSONArray array = new JSONArray(jsonStr);
-        bookmarks.clear();
-        for (int i = 0; i < array.length(); i++) {
-            JSONObject obj = array.getJSONObject(i);
-            String title = obj.optString("title", "Untitled");
-            String url = obj.optString("url", "");
-            if (!url.isEmpty()) {
-                bookmarks.add(new Bookmark(title, url));
-                faviconExecutor.execute(() -> {
-                    String key = faviconKey(url);
-                    if (key == null || faviconCache.get(key) != null || readFaviconFromDisk(key, url) != null) {
-                        return;
-                    }
-                    Bitmap favicon = normalizeFavicon(fetchFavicon(url));
-                    if (favicon != null) {
-                        faviconCache.put(key, favicon);
-                        saveFaviconToFile(key, favicon);
-                    }
-                });
-            }
-        }
-        saveBookmarks();
-    }
-
-    private void parseAndAddBookmarks(String jsonStr) {
-        try {
-            JSONArray array = new JSONArray(jsonStr);
-            for (int i = 0; i < array.length(); i++) {
-                JSONObject obj = array.getJSONObject(i);
-                String title = obj.optString("title", "Untitled");
-                String url = obj.optString("url", "");
-                if (!url.isEmpty()) {
-                    bookmarks.add(new Bookmark(title, url));
-                }
-            }
-        } catch (JSONException e) {
-            e.printStackTrace();
-        }
-    }
-
     private void saveBookmarks() {
-        JSONArray array = new JSONArray();
-        for (Bookmark bm : bookmarks) {
-            JSONObject obj = new JSONObject();
-            try {
-                obj.put("title", bm.getTitle());
-                obj.put("url", bm.getUrl());
-            } catch (JSONException e) {
-                e.printStackTrace();
-            }
-            array.put(obj);
-        }
-        pref.edit().putString(KEY_BOOKMARKS, array.toString()).apply();
+        bookmarkKeyCache = null;
+        pref.edit().putString(KEY_BOOKMARKS, BookmarkStore.toJson(bookmarks)).apply();
+        updateBookmarkStar();
     }
     private void loadHistory() {
     historyItems.clear();
@@ -4461,7 +4840,6 @@ private void addHistory(String url, String title) {
             bindFavicon(faviconImageView, url);
         }
     }
-
     private void bindFavicon(final ImageView target, final String url) {
         final String key = faviconKey(url);
         target.setTag(key);
@@ -4506,206 +4884,30 @@ private void addHistory(String url, String title) {
         });
     }
 
-    private static final class HistoryRow {
-    static final int TYPE_HEADER = 0;
-    static final int TYPE_ITEM = 1;
+    private final java.util.HashSet<String> faviconMisses = new java.util.HashSet<>();
 
-    final int type;
-    final String header;
-    final HistoryItem item;
-
-    private HistoryRow(int type, String header, HistoryItem item) {
-        this.type = type;
-        this.header = header;
-        this.item = item;
-    }
-
-    static HistoryRow header(String header) {
-        return new HistoryRow(TYPE_HEADER, header, null);
-    }
-
-    static HistoryRow item(HistoryItem item) {
-        return new HistoryRow(TYPE_ITEM, null, item);
-    }
-}
-
-private class HistoryAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
-    private final List<HistoryItem> sourceItems;
-    private final List<HistoryRow> rows = new ArrayList<>();
-    private final AlertDialog dialog;
-    private final SimpleDateFormat headerFormat = new SimpleDateFormat("yyyy/MM/dd", Locale.getDefault());
-    private final SimpleDateFormat groupKeyFormat = new SimpleDateFormat("yyyyMMdd", Locale.getDefault());
-
-    HistoryAdapter(List<HistoryItem> items, AlertDialog dialog) {
-        this.sourceItems = items;
-        this.dialog = dialog;
-        rebuildRows();
-    }
-
-    private void rebuildRows() {
-        rows.clear();
-        String lastGroupKey = null;
-        ArrayList<HistoryItem> copy;
-        synchronized (sourceItems) {
-            copy = new ArrayList<>(sourceItems);
+    private Bitmap getFaviconBitmap(String url) {
+        final String key = faviconKey(url);
+        if (key == null) return null;
+        Bitmap cached = faviconCache.get(key);
+        if (cached != null) return cached;
+        if (faviconMisses.contains(url)) return null;
+        Bitmap loaded = readFaviconFromDisk(key, url);
+        if (loaded != null) {
+            faviconCache.put(key, loaded);
         }
-        Collections.reverse(copy);
-        for (HistoryItem item : copy) {
-            String groupKey = groupKeyFormat.format(new Date(item.getTimestamp()));
-            if (!groupKey.equals(lastGroupKey)) {
-                rows.add(HistoryRow.header(headerFormat.format(new Date(item.getTimestamp()))));
-                lastGroupKey = groupKey;
+        if (loaded == null) {
+            if (faviconMisses.size() > 2000) {
+                faviconMisses.clear();
             }
-            rows.add(HistoryRow.item(item));
+            faviconMisses.add(url);
         }
-    }
-
-    @Override
-    public int getItemViewType(int position) {
-        return rows.get(position).type;
-    }
-
-    @Override
-    public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-        LayoutInflater inflater = LayoutInflater.from(parent.getContext());
-        if (viewType == HistoryRow.TYPE_HEADER) {
-            View view = inflater.inflate(R.layout.item_history_header, parent, false);
-            return new HeaderViewHolder(view);
-        }
-        View view = inflater.inflate(R.layout.item_history, parent, false);
-        return new HistoryViewHolder(view);
-    }
-
-    @Override
-    public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
-        HistoryRow row = rows.get(position);
-        if (holder instanceof HeaderViewHolder) {
-            ((HeaderViewHolder) holder).date.setText(row.header);
-            return;
-        }
-        HistoryItem item = row.item;
-        HistoryViewHolder historyHolder = (HistoryViewHolder) holder;
-        historyHolder.title.setText((item.getTitle() != null && !item.getTitle().isEmpty()) ? item.getTitle() : item.getUrl());
-        historyHolder.url.setText(item.getUrl());
-        bindFavicon(historyHolder.favicon, item.getUrl());
-        historyHolder.itemView.setOnClickListener(v -> {
-            getCurrentWebView().loadUrl(item.getUrl());
-            dialog.dismiss();
-        });
-        historyHolder.itemView.setOnLongClickListener(v -> {
-            int currentPosition = historyHolder.getBindingAdapterPosition();
-            if (currentPosition == RecyclerView.NO_POSITION) return true;
-            HistoryRow currentRow = rows.get(currentPosition);
-            if (currentRow.type != HistoryRow.TYPE_ITEM || currentRow.item == null) return true;
-            HistoryItem currentItem = currentRow.item;
-            String[] options = {"URLコピー", "削除"};
-            new MaterialAlertDialogBuilder(MainActivity.this)
-                    .setTitle("操作を選択")
-                    .setItems(options, (dialogInterface, which) -> {
-                        if (which == 0) {
-                            copyLink(currentItem.getUrl());
-                        } else if (which == 1) {
-                            sourceItems.remove(currentItem);
-                            rebuildRows();
-                            notifyDataSetChanged();
-                            saveHistory();
-                            Toast.makeText(MainActivity.this, "削除しました", Toast.LENGTH_SHORT).show();
-                        }
-                    }).show();
-            return true;
-        });
-    }
-
-    @Override
-    public int getItemCount() {
-        return rows.size();
-    }
-
-    class HeaderViewHolder extends RecyclerView.ViewHolder {
-        TextView date;
-
-        HeaderViewHolder(View itemView) {
-            super(itemView);
-            date = itemView.findViewById(R.id.historyDateHeader);
-        }
-    }
-
-    class HistoryViewHolder extends RecyclerView.ViewHolder {
-        ImageView favicon;
-        TextView title;
-        TextView url;
-
-        HistoryViewHolder(View itemView) {
-            super(itemView);
-            favicon = itemView.findViewById(R.id.historyFavicon);
-            title = itemView.findViewById(R.id.historyTitle);
-            url = itemView.findViewById(R.id.historyUrl);
-        }
-    }
-}
-    private class BookmarkAdapter extends RecyclerView.Adapter<BookmarkAdapter.BookmarkViewHolder> {
-        private final List<Bookmark> items;
-        private final boolean managementMode;
-        private final AlertDialog dialog;
-        public BookmarkAdapter(List<Bookmark> items, boolean managementMode, AlertDialog dialog) {
-            this.items = items;
-            this.managementMode = managementMode;
-            this.dialog = dialog;
-        }
-        @Override
-        public BookmarkViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-            View view = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_bookmark, parent, false);
-            return new BookmarkViewHolder(view);
-        }
-        @Override
-        public void onBindViewHolder(BookmarkViewHolder holder, int position) {
-            Bookmark bm = items.get(position);
-            holder.title.setText(bm.getTitle());
-            holder.url.setText(bm.getUrl());
-            bindFavicon(holder.favicon, bm.getUrl());
-            holder.itemView.setOnClickListener(v -> {
-                getCurrentWebView().loadUrl(bm.getUrl());
-                dialog.dismiss();
-            });
-            if (managementMode) {
-            holder.itemView.setOnLongClickListener(v -> {
-                int currentPosition = holder.getBindingAdapterPosition();
-                if (currentPosition == RecyclerView.NO_POSITION) return true;
-                String[] options = {"編集", "削除"};
-                new MaterialAlertDialogBuilder(MainActivity.this)
-                        .setTitle("操作を選択")
-                        .setItems(options, (dialogInterface, which) -> {
-                            if (which == 0) {
-                                showEditBookmarkDialog(currentPosition, this);
-                            } else if (which == 1) {
-                                items.remove(currentPosition);
-                                notifyItemRemoved(currentPosition);
-                                saveBookmarks();
-                                Toast.makeText(MainActivity.this, "削除しました", Toast.LENGTH_SHORT).show();
-                            }
-                        }).show();
-                return true;
-            });
-        }
-    }
-        @Override
-        public int getItemCount() { return items.size(); }
-        class BookmarkViewHolder extends RecyclerView.ViewHolder {
-            ImageView favicon;
-            TextView title;
-            TextView url;
-            public BookmarkViewHolder(View itemView) {
-                super(itemView);
-                favicon = itemView.findViewById(R.id.bookmarkFavicon);
-                title = itemView.findViewById(R.id.bookmarkTitle);
-                url = itemView.findViewById(R.id.bookmarkUrl);
-            }
-        }
+        return loaded;
     }
 
     private void saveCookiesForTab(final int id, final String url) {
         try {
-            if (id == -1 || url == null || !BrowserUrlRouter.isWebUrl(url)) return;
+            if (id == -1 || url == null || CookieSitePolicy.isBlockAllActive() || !BrowserUrlRouter.isWebUrl(url)) return;
             if (!BrowserEngine.get().isAgentReady()) return;
             BrowserEngine.get().getAgent().cookiesGet(PageAgent.json("url", url), new PageAgent.CookieCallback() {
                 @Override
@@ -4730,7 +4932,7 @@ private class HistoryAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
 
     private void restoreCookiesForTab(final int id, final String url) {
         try {
-            if (id == -1 || url == null) return;
+            if (id == -1 || url == null || CookieSitePolicy.isBlockAllActive()) return;
             File in = new File(getFilesDir(), "tab_cookies_" + id + ".json");
             if (!in.exists()) return;
             String payload = null;
@@ -4913,6 +5115,7 @@ private class HistoryAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         }
         name = name.trim();
         name = FILE_NAME_ILLEGAL.matcher(name).replaceAll("_");
+        name = DownloadSupport.sanitizeFileName(name);
         name = FILE_NAME_TRAILING.matcher(name).replaceAll("");
         if (name.isEmpty()) {
             name = "download_" + System.currentTimeMillis();

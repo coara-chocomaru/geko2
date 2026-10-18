@@ -26,7 +26,6 @@ import android.text.TextWatcher;
 import android.text.style.AbsoluteSizeSpan;
 import android.text.style.ForegroundColorSpan;
 import android.util.Base64;
-import android.util.Base64OutputStream;
 import android.util.Log;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -43,6 +42,7 @@ import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
 import com.google.zxing.BarcodeFormat;
+import com.google.zxing.EncodeHintType;
 import com.google.zxing.BinaryBitmap;
 import com.google.zxing.ChecksumException;
 import com.google.zxing.FormatException;
@@ -56,8 +56,8 @@ import com.google.zxing.WriterException;
 import com.google.zxing.common.BitMatrix;
 import com.google.zxing.common.HybridBinarizer;
 import com.google.zxing.qrcode.QRCodeWriter;
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
 
-import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -73,13 +73,15 @@ import java.util.Date;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.EnumMap;
+import java.util.Map;
 
 public class QrCodeActivity extends AppCompatActivity implements SurfaceHolder.Callback, Camera.PreviewCallback {
 
     private static final int FILE_SELECT_REQUEST = 1;
     private static final int PERMISSION_REQUEST_CODE = 100;
     private static final int CAMERA_PERMISSION_REQUEST_CODE = 101;
-    private static final int MAX_QR_DATA_LENGTH = 2953;
+    private static final int MAX_QR_BYTE_CAPACITY = 2953;
     private static final String TAG = "QrCodeActivity";
 
     private Button selectFileButton;
@@ -288,27 +290,41 @@ public class QrCodeActivity extends AppCompatActivity implements SurfaceHolder.C
         if (requestCode == FILE_SELECT_REQUEST && resultCode == RESULT_OK && data != null) {
             Uri fileUri = data.getData();
             if (fileUri != null) {
+                if (isProcessing) {
+                    Toast.makeText(this, "変換処理中です。", Toast.LENGTH_SHORT).show();
+                    return;
+                }
                 final String originalFileName = getFileName(fileUri);
+                isProcessing = true;
                 executorService.execute(() -> {
-                    isProcessing = true;
-                    String qrContent = createDataUri(fileUri);
-                    if (qrContent == null) {
-                        runOnUiThread(() -> Toast.makeText(this, "ファイルの変換に失敗しました", Toast.LENGTH_LONG).show());
-                        isProcessing = false;
-                        return;
-                    }
-                    Bitmap qrBitmap = generateQrCodeBitmap(qrContent, 500, 500);
-                    if (qrBitmap != null) {
-                        final String savedFileName = originalFileName + "_" + getCurrentTimeStamp() + ".png";
+                    Bitmap qrBitmap = null;
+                    String qrContent = null;
+                    try {
+                        qrContent = createDataUri(fileUri);
+                        qrBitmap = generateQrCodeBitmap(qrContent, 500, 500);
+                        String baseName = originalFileName.replaceAll("[\\/:*?\"<>|]", "_");
+                        if (baseName.length() > 64) {
+                            baseName = baseName.substring(0, 64);
+                        }
+                        final String savedFileName = baseName + "_" + getCurrentTimeStamp() + ".png";
                         final boolean saved = saveBitmapToPictures(qrBitmap, savedFileName);
-                        runOnUiThread(() -> {
-                            Toast.makeText(this, saved ? "QRコード画像保存: " + savedFileName : "保存に失敗しました", Toast.LENGTH_LONG).show();
-                        });
-                        qrBitmap.recycle(); 
-                    } else {
-                        runOnUiThread(() -> Toast.makeText(this, "QRコード生成に失敗しました", Toast.LENGTH_LONG).show());
+                        runOnUiThread(() -> Toast.makeText(this, saved ? "QRコード画像保存: " + savedFileName : "保存に失敗しました", Toast.LENGTH_LONG).show());
+                    } catch (PayloadTooLargeException e) {
+                        runOnUiThread(() -> Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show());
+                    } catch (WriterException e) {
+                        long fileSize = getFileSize(fileUri);
+                        String summary = fileSize >= 0 ? "元ファイル " + fileSize + " bytes" : "元ファイル容量不明";
+                        String message = createCapacityMessage(e.getMessage(), summary);
+                        runOnUiThread(() -> Toast.makeText(this, message, Toast.LENGTH_LONG).show());
+                    } catch (Exception e) {
+                        String detail = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                        runOnUiThread(() -> Toast.makeText(this, "ファイルのQR変換に失敗しました: " + detail, Toast.LENGTH_LONG).show());
+                    } finally {
+                        if (qrBitmap != null && !qrBitmap.isRecycled()) {
+                            qrBitmap.recycle();
+                        }
+                        isProcessing = false;
                     }
-                    isProcessing = false;
                 });
             }
         }
@@ -433,20 +449,51 @@ public class QrCodeActivity extends AppCompatActivity implements SurfaceHolder.C
         }
     }
 
-    private Bitmap generateQrCodeBitmap(String text, int width, int height) {
+    private Bitmap generateQrCodeBitmap(String text, int width, int height) throws WriterException {
+        if (text == null || text.isEmpty()) {
+            throw new IllegalArgumentException("QRコードにする文字列が空です");
+        }
         QRCodeWriter writer = new QRCodeWriter();
-        try {
-            BitMatrix bitMatrix = writer.encode(text, BarcodeFormat.QR_CODE, width, height);
-            Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565); 
-            for (int x = 0; x < width; x++) {
-                for (int y = 0; y < height; y++) {
-                    bitmap.setPixel(x, y, bitMatrix.get(x, y) ? Color.BLACK : Color.WHITE);
+        Map<EncodeHintType, Object> hints = new EnumMap<>(EncodeHintType.class);
+        hints.put(EncodeHintType.CHARACTER_SET, "UTF-8");
+        hints.put(EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.L);
+        hints.put(EncodeHintType.MARGIN, 4);
+        BitMatrix bitMatrix = writer.encode(text, BarcodeFormat.QR_CODE, 0, 0, hints);
+        int symbolSize = bitMatrix.getWidth();
+        int requestedSize = Math.max(1, Math.min(width, height));
+        int moduleScale = Math.max(4, Math.min(16, requestedSize / symbolSize));
+        int outputWidth = bitMatrix.getWidth() * moduleScale;
+        int outputHeight = bitMatrix.getHeight() * moduleScale;
+        Bitmap bitmap = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.RGB_565);
+        int[] pixels = new int[outputWidth * outputHeight];
+        for (int y = 0; y < bitMatrix.getHeight(); y++) {
+            for (int x = 0; x < bitMatrix.getWidth(); x++) {
+                int color = bitMatrix.get(x, y) ? Color.BLACK : Color.WHITE;
+                int pixelLeft = x * moduleScale;
+                int pixelTop = y * moduleScale;
+                for (int dy = 0; dy < moduleScale; dy++) {
+                    int row = (pixelTop + dy) * outputWidth + pixelLeft;
+                    for (int dx = 0; dx < moduleScale; dx++) {
+                        pixels[row + dx] = color;
+                    }
                 }
             }
-            return bitmap;
-        } catch (WriterException e) {
-            return null;
         }
+        bitmap.setPixels(pixels, 0, outputWidth, 0, 0, outputWidth, outputHeight);
+        return bitmap;
+    }
+
+    private String createCapacityMessage(String cause, String payloadSummary) {
+        String detail = cause == null || cause.trim().isEmpty() ? "内容がQRコードの容量を超えています" : cause;
+        return "1枚のQRコードに収まりません。" + payloadSummary + "。" + detail + "。QRコードの最大容量は文字種・文字コード・誤り訂正レベルで変わります。短いURLを使うか、内容を分割してください。";
+    }
+
+    private String createPayloadSummary(String text) {
+        if (text == null) {
+            return "データ量を判定できません";
+        }
+        int byteCount = text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        return "UTF-8換算 " + byteCount + " bytes";
     }
 
     private String getFileName(Uri uri) {
@@ -483,6 +530,9 @@ public class QrCodeActivity extends AppCompatActivity implements SurfaceHolder.C
                 out = getContentResolver().openOutputStream(uri);
             } else {
                 File picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES);
+                if (!picturesDir.exists() && !picturesDir.mkdirs()) {
+                    return false;
+                }
                 File file = new File(picturesDir, fileName);
                 out = new FileOutputStream(file);
             }
@@ -504,73 +554,109 @@ public class QrCodeActivity extends AppCompatActivity implements SurfaceHolder.C
     }
 
     private void generateTextQrCode() {
-        final String text = inputEditText.getText().toString().trim();
-        if (!text.isEmpty()) {
-            executorService.execute(() -> {
-                isProcessing = true;
-                Bitmap qrBitmap = generateQrCodeBitmap(text, 500, 500);
-                if (qrBitmap != null) {
-                    final String savedFileName = getCurrentTimeStamp() + ".png";
-                    final boolean saved = saveBitmapToPictures(qrBitmap, savedFileName);
-                    runOnUiThread(() -> {
-                        Toast.makeText(this, saved ? "QRコード画像保存: " + savedFileName : "保存に失敗しました", Toast.LENGTH_LONG).show();
-                    });
-                    qrBitmap.recycle(); 
-                } else {
-                    runOnUiThread(() -> Toast.makeText(this, "QRコード生成に失敗しました", Toast.LENGTH_LONG).show());
+        final String text = inputEditText.getText().toString();
+        if (text.trim().isEmpty()) {
+            return;
+        }
+        if (isProcessing) {
+            Toast.makeText(this, "変換処理中です。", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        isProcessing = true;
+        executorService.execute(() -> {
+            Bitmap qrBitmap = null;
+            try {
+                qrBitmap = generateQrCodeBitmap(text, 500, 500);
+                final String savedFileName = getCurrentTimeStamp() + ".png";
+                final boolean saved = saveBitmapToPictures(qrBitmap, savedFileName);
+                runOnUiThread(() -> Toast.makeText(this, saved ? "QRコード画像保存: " + savedFileName : "保存に失敗しました", Toast.LENGTH_LONG).show());
+            } catch (WriterException e) {
+                final String message = createCapacityMessage(e.getMessage(), createPayloadSummary(text));
+                runOnUiThread(() -> Toast.makeText(this, message, Toast.LENGTH_LONG).show());
+            } catch (Exception e) {
+                String detail = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                runOnUiThread(() -> Toast.makeText(this, "QRコード生成に失敗しました: " + detail, Toast.LENGTH_LONG).show());
+            } finally {
+                if (qrBitmap != null && !qrBitmap.isRecycled()) {
+                    qrBitmap.recycle();
                 }
                 isProcessing = false;
-            });
-        }
+            }
+        });
     }
 
-    private String createDataUri(Uri fileUri) {
+    private String createDataUri(Uri fileUri) throws IOException, PayloadTooLargeException {
         String mimeType = getContentResolver().getType(fileUri);
-        if (mimeType == null) mimeType = "application/octet-stream";
-        String base64Data = convertFileToBase64(fileUri);
-        if (base64Data == null) return null;
-        String dataUriPrefix = mimeType.startsWith("image/") ? "data:" + mimeType + ";base64," :
-                (mimeType.equals("text/plain") ? "data:" + mimeType + ";charset=utf-8;base64," : "data:" + mimeType + ";base64,");
+        if (mimeType == null || mimeType.trim().isEmpty()) {
+            mimeType = "application/octet-stream";
+        }
+        String dataUriPrefix = mimeType.equalsIgnoreCase("text/plain")
+                ? "data:" + mimeType + ";charset=utf-8;base64,"
+                : "data:" + mimeType + ";base64,";
+        int prefixBytes = dataUriPrefix.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        int availableBase64Chars = MAX_QR_BYTE_CAPACITY - prefixBytes;
+        if (availableBase64Chars < 4) {
+            throw new PayloadTooLargeException("ファイル形式の情報が長すぎるため、単一QRコードに変換できません");
+        }
+        int maximumFileBytes = (availableBase64Chars / 4) * 3;
+        long reportedSize = getFileSize(fileUri);
+        if (reportedSize > maximumFileBytes) {
+            throw createFileTooLargeException(reportedSize, maximumFileBytes);
+        }
+        byte[] fileBytes = readFileLimited(fileUri, maximumFileBytes);
+        String base64Data = Base64.encodeToString(fileBytes, Base64.NO_WRAP);
         String dataUri = dataUriPrefix + base64Data;
-        if (dataUri.length() > MAX_QR_DATA_LENGTH) {
-            runOnUiThread(() -> Toast.makeText(this, "ファイル容量がQRコードのサイズを超えています", Toast.LENGTH_LONG).show());
-            return null;
+        int encodedBytes = dataUri.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        if (encodedBytes > MAX_QR_BYTE_CAPACITY) {
+            throw createFileTooLargeException(fileBytes.length, maximumFileBytes);
         }
         return dataUri;
     }
 
-    private String convertFileToBase64(Uri fileUri) {
-        InputStream inputStream = null;
-        ByteArrayOutputStream byteArrayOutputStream = null;
+    private long getFileSize(Uri fileUri) {
+        Cursor cursor = null;
         try {
-            inputStream = getContentResolver().openInputStream(fileUri);
-            if (inputStream == null) return null;
-            BufferedInputStream bis = new BufferedInputStream(inputStream);
-            byteArrayOutputStream = new ByteArrayOutputStream();
-            Base64OutputStream base64OutputStream = new Base64OutputStream(byteArrayOutputStream, Base64.NO_WRAP);
-            byte[] buffer = new byte[8192]; 
-            int bytesRead;
-            while ((bytesRead = bis.read(buffer)) != -1) {
-                base64OutputStream.write(buffer, 0, bytesRead);
+            cursor = getContentResolver().query(fileUri, new String[]{OpenableColumns.SIZE}, null, null, null);
+            if (cursor != null && cursor.moveToFirst()) {
+                int index = cursor.getColumnIndex(OpenableColumns.SIZE);
+                if (index >= 0 && !cursor.isNull(index)) {
+                    return cursor.getLong(index);
+                }
             }
-            base64OutputStream.flush();
-            base64OutputStream.close();
-            return byteArrayOutputStream.toString("UTF-8");
-        } catch (IOException ignored) {
-            return null;
+        } catch (Exception ignored) {
         } finally {
-            if (byteArrayOutputStream != null) {
-                try {
-                    byteArrayOutputStream.close();
-                } catch (IOException ignored) {
-                }
+            if (cursor != null) {
+                cursor.close();
             }
-            if (inputStream != null) {
-                try {
-                    inputStream.close();
-                } catch (IOException ignored) {
-                }
+        }
+        return -1L;
+    }
+
+    private byte[] readFileLimited(Uri fileUri, int maximumFileBytes) throws IOException, PayloadTooLargeException {
+        try (InputStream input = getContentResolver().openInputStream(fileUri);
+             ByteArrayOutputStream output = new ByteArrayOutputStream(Math.min(maximumFileBytes, 4096))) {
+            if (input == null) {
+                throw new IOException("ファイルを開けません");
             }
+            byte[] buffer = new byte[2048];
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                if (output.size() + count > maximumFileBytes) {
+                    throw createFileTooLargeException(output.size() + count, maximumFileBytes);
+                }
+                output.write(buffer, 0, count);
+            }
+            return output.toByteArray();
+        }
+    }
+
+    private PayloadTooLargeException createFileTooLargeException(long fileBytes, int maximumFileBytes) {
+        return new PayloadTooLargeException("このファイルは単一QRコードの容量を超えています。ファイル容量: " + fileBytes + " bytes、現在の形式での概算上限: " + maximumFileBytes + " bytes。QRは分割するか、ファイルを短いURLで共有してください");
+    }
+
+    private static final class PayloadTooLargeException extends Exception {
+        PayloadTooLargeException(String message) {
+            super(message);
         }
     }
 
@@ -580,9 +666,7 @@ public class QrCodeActivity extends AppCompatActivity implements SurfaceHolder.C
             decodeTask.cancel(true);
             decodeTask = null;
         }
-        reader = null; 
-        resultLayout.removeAllViews(); 
-        System.gc(); 
+        resultLayout.removeAllViews();
         finish();
     }
 
@@ -631,6 +715,5 @@ public class QrCodeActivity extends AppCompatActivity implements SurfaceHolder.C
             camera.release();
             camera = null;
         }
-        System.gc(); 
     }
 }

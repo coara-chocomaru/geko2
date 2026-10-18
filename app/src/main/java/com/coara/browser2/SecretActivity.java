@@ -74,18 +74,26 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.textfield.TextInputEditText;
 import com.coara.browser2.util.SafeBrowsingSupport;
 import com.coara.browser2.util.BasicAuthManager;
+import com.coara.browser2.util.CookieSitePolicy;
 import com.coara.browser2.util.ExternalDownloadTabTracker;
 import com.coara.browser2.util.DownloadSupport;
 import com.coara.browser2.util.DownloadFallbackManager;
 import com.coara.browser2.util.BrowserConstants;
+import com.coara.browser2.util.AdBlockEngine;
+import com.coara.browser2.util.PageTranslator;
+import com.coara.browser2.util.TranslateSettingsDialog;
 import com.coara.browser2.util.BrowserUrlRouter;
 import com.coara.browser2.util.BrowserAssetLoader;
 import com.coara.browser2.util.UiThread;
+import com.coara.browser2.util.HistoryDialog;
+import com.coara.browser2.model.HistoryItem;
 import com.coara.browser2.plugin.PluginHost;
 import com.coara.browser2.plugin.PluginManagerActivity;
 import com.coara.browser2.plugin.PluginManager;
 import com.coara.browser2.plugin.PluginRuntime;
+import com.coara.browser2.util.FindInPageController;
 import com.coara.browser2.util.KeyboardSettings;
+import com.coara.browser2.util.NetworkStateGuard;
 import com.coara.browser2.util.TouchpadController;
 import com.coara.browser2.util.TouchpadOverlayController;
 import com.coara.browser2.util.TouchpadSettings;
@@ -131,10 +139,6 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     private static final String START_PAGE = BrowserConstants.APP_ASSET_SECRET_PAGE;
     private static final int FILE_SELECT_CODE = 1001;
     private static final int MAX_HISTORY_SIZE = 100;
-    private View findInPageBarView;
-    private EditText etFindQuery;
-    private TextView tvFindCount;
-    private Button btnFindPrev, btnFindNext, btnFindClose;
     private ValueCallback<Boolean> pendingPermissionCallback = null;
     private ActivityResultLauncher<String[]> permissionRequestLauncher;
 
@@ -151,13 +155,14 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     private SwipeRefreshLayout swipeRefreshLayout;
     private FrameLayout webViewContainer;
     private ImageView copyButton;
+    private ImageView clearButton;
+    private ImageView urlSecurityIcon;
+    private android.widget.ProgressBar pageProgressBar;
     private ActivityResultLauncher<Intent> fileChooserLauncher;
     private ValueCallback<Uri[]> filePathCallback;
     private ActivityResultLauncher<String> permissionLauncher;
     private SharedPreferences pref;
     private final ExecutorService backgroundExecutor = UiThread.newPool(2);
-    private int currentMatchIndex = 0;
-    private int totalMatches = 0;
     private final List<Bookmark> bookmarks = new ArrayList<>();
     private final List<HistoryItem> historyItems = new ArrayList<>();
 
@@ -192,28 +197,10 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         public String getUrl() { return url; }
     }
 
-    public static class HistoryItem {
-        private final String title;
-        private final String url;
-        private final long timestamp;
-
-        public HistoryItem(String title, String url) {
-            this(title, url, System.currentTimeMillis());
-        }
-
-        public HistoryItem(String title, String url, long timestamp) {
-            this.title = title;
-            this.url = url;
-            this.timestamp = timestamp;
-        }
-
-        public String getTitle() { return title; }
-        public String getUrl() { return url; }
-        public long getTimestamp() { return timestamp; }
-    }
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
+    getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
     setContentView(R.layout.secret_main);
 
     toolbar = findViewById(R.id.topAppBar);
@@ -253,12 +240,13 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         urlEditOriginalStrokeWidth = urlContainer.getStrokeWidth();
         urlEditText.setImeOptions(EditorInfo.IME_ACTION_GO);
         KeyboardSettings.applyToEditor(urlEditText, pref);
+        urlEditText.setImeOptions(urlEditText.getImeOptions() | 0x01000000);
+        urlEditText.setInputType(urlEditText.getInputType() | EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        urlEditText.setPrivateImeOptions("nm");
         faviconImageView = findViewById(R.id.favicon);
         btnGo = findViewById(R.id.btnGo);
         swipeRefreshLayout = findViewById(R.id.swipeRefreshLayout);
         webViewContainer = findViewById(R.id.webViewContainer);
-
-        purgeSecretTabPersistence();
 
         webView = createNewWebView();
         webViewContainer.addView(webView);
@@ -287,11 +275,53 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             Toast.makeText(SecretActivity.this, "URLをコピーしました", Toast.LENGTH_SHORT).show();
         });
         ViewGroup parentView = (ViewGroup) urlEditText.getParent();
-        FrameLayout.LayoutParams layoutParams = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        layoutParams.gravity = Gravity.END | Gravity.CENTER_VERTICAL;
-        copyButton.setLayoutParams(layoutParams);
+        urlSecurityIcon = findViewById(R.id.urlSecurityIcon);
+        pageProgressBar = findViewById(R.id.pageProgressBar);
+        int buttonSize = Math.round(36 * getResources().getDisplayMetrics().density);
+        int buttonPad = Math.round(8 * getResources().getDisplayMetrics().density);
+        android.util.TypedValue ripple = new android.util.TypedValue();
+        getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, ripple, true);
+        copyButton.setPadding(buttonPad, buttonPad, buttonPad, buttonPad);
+        copyButton.setBackgroundResource(ripple.resourceId);
+        copyButton.setContentDescription("URLをコピー");
+        copyButton.setLayoutParams(new LinearLayout.LayoutParams(buttonSize, buttonSize));
+        clearButton = new ImageView(this);
+        clearButton.setImageResource(R.drawable.ic_close);
+        clearButton.setAlpha(0.6f);
+        clearButton.setPadding(buttonPad, buttonPad, buttonPad, buttonPad);
+        clearButton.setBackgroundResource(ripple.resourceId);
+        clearButton.setContentDescription("入力を消去");
+        clearButton.setVisibility(View.GONE);
+        clearButton.setLayoutParams(new LinearLayout.LayoutParams(buttonSize, buttonSize));
+        clearButton.setOnClickListener(v -> {
+            urlEditText.setText("");
+            urlEditText.requestFocus();
+        });
+        parentView.addView(clearButton);
         parentView.addView(copyButton);
+        urlEditText.addTextChangedListener(new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+            }
+
+            @Override
+            public void afterTextChanged(android.text.Editable s) {
+                updateClearButton();
+            }
+        });
+        View.OnLongClickListener urlBarLongClick = v -> {
+            if (urlEditMode) {
+                return false;
+            }
+            showUrlBarMenu(v);
+            return true;
+        };
+        urlContainer.setOnLongClickListener(urlBarLongClick);
+        urlEditText.setOnLongClickListener(urlBarLongClick);
 
         urlEditText.setOnFocusChangeListener((v, hasFocus) -> {
             if (hasFocus) {
@@ -397,6 +427,10 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
         @Override
         public void handleOnBackPressed() {
+        if (findController != null && findController.isShowing()) {
+            findController.hide();
+            return;
+        }
         if (urlEditMode || (urlEditText != null && urlEditText.hasFocus() && !KeyboardSettings.isAlwaysVisible(pref))) {
             exitUrlEditMode();
             return;
@@ -524,20 +558,30 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             } catch (Exception ignored) {
             }
         }
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
-            BrowserView current = getCurrentWebView();
-            if (current != null) {
-                try {
-                    current.clearCache(false);
-                } catch (Exception ignored) {
-                }
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL && faviconCache != null) {
+            try {
+                faviconCache.evictAll();
+            } catch (Exception ignored) {
             }
         }
     }
 
     @Override
     protected void onResume() {
+        if (networkStateGuard == null) {
+            networkStateGuard = new NetworkStateGuard(this, () -> java.util.Collections.singletonList(getCurrentWebView()));
+        }
+        networkStateGuard.start();
         super.onResume();
+        com.coara.browser2.fx.FxExtensionManager.get().setForeground(this);
+        BrowserView activeWebView = getCurrentWebView();
+        if (activeWebView != null) {
+            try {
+                activeWebView.resumeTimers();
+                activeWebView.onResume();
+            } catch (Exception ignored) {
+            }
+        }
         TouchpadController.setCurrentWebView(getCurrentWebView());
         if (urlEditMode) {
             KeyboardSettings.onResume(this, urlEditText, pref);
@@ -583,13 +627,29 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
 
     @Override
     protected void onPause() {
+        if (networkStateGuard != null) {
+            networkStateGuard.stop();
+        }
         TouchpadOverlayController.onHostPause(this);
         PluginRuntime.onHostPause(this);
+        com.coara.browser2.fx.FxExtensionManager.get().clearForeground(this);
+        BrowserView activeWebView = getCurrentWebView();
+        if (activeWebView != null) {
+            try {
+                activeWebView.onPause();
+                activeWebView.pauseTimers();
+            } catch (Exception ignored) {
+            }
+        }
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
+        PageTranslator.release();
+        if (findController != null) {
+            findController.release();
+        }
         TouchpadOverlayController.hide(this);
         BasicAuthManager.cancelPendingForActivity(SecretActivity.this);
         UiThread.mainHandler().removeCallbacks(reloadOpenTabsForPluginsRunnable);
@@ -786,6 +846,10 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         if (source == null || request == null || DownloadSupport.isBlank(request.url)) {
             return;
         }
+        if (com.coara.browser2.fx.FxExtensionManager.get().offerInstall(SecretActivity.this, request.url, request.mimeType,
+                () -> startDownloadFromRequest(source, request))) {
+            return;
+        }
         long downloadId = startDownloadFromRequest(source, request);
         if (downloadId > 0 && ExternalDownloadTabTracker.isExternal(source)) {
             if (ExternalDownloadTabTracker.shouldCloseWhenDownloadStarts(source, request.url, request.contentDisposition, request.mimeType)) {
@@ -920,11 +984,17 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
 
             @Override
             public void onPageStarted(BrowserView view, String url) {
+                PageTranslator.onPageStarted(view);
                 ExternalDownloadTabTracker.onPageStarted(view, url);
                 PluginRuntime.onPageStarted(view, url);
+                AdBlockEngine.onPageStarted(view);
+                if (findController != null) {
+                    findController.onPageStarted(view);
+                }
                 TouchpadController.onPageStarted(view);
                 clearPendingSpaHistory(view);
                 urlEditText.setText(url);
+                updateUrlSecurityIcon();
             }
 
             @Override
@@ -951,9 +1021,13 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                     url = "";
                 }
                 ExternalDownloadTabTracker.onPageFinished(view, url);
+                if (findController != null) {
+                    findController.onPageFinished(view);
+                }
                 PluginRuntime.onPageFinished(view, url);
                 TouchpadController.onPageFinished(view);
                 KeyboardSettings.configureWebView(view, pref);
+                PageTranslator.onPageFinished(view, false);
                 if (url.equals(START_PAGE)) {
                     faviconImageView.setVisibility(View.GONE);
                     urlEditText.setText("");
@@ -963,6 +1037,7 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                         urlEditText.setText(url);
                     }
                 }
+                updateUrlSecurityIcon();
                 clearPendingSpaHistory(view);
                 addHistory(url, view.getTitle());
                 if (swipeRefreshLayout != null) {
@@ -1331,6 +1406,7 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                     if (current == null || !current.equals(url)) return;
                     updatePullToRefreshState(owner, url);
                     urlEditText.setText(url);
+                    updateUrlSecurityIcon();
                     addHistory(url, owner.getTitle());
                     if (swipeRefreshLayout != null) {
                         swipeRefreshLayout.setEnabled(false);
@@ -1344,6 +1420,84 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         UiThread.mainHandler().postDelayed(task, 180L);
     }
 
+    private void updateClearButton() {
+        if (clearButton == null) {
+            return;
+        }
+        boolean show = urlEditMode && urlEditText != null && urlEditText.length() > 0;
+        clearButton.setVisibility(show ? View.VISIBLE : View.GONE);
+    }
+
+    private void updateUrlSecurityIcon() {
+        if (urlSecurityIcon == null) {
+            return;
+        }
+        BrowserView current = getCurrentWebView();
+        String url = current != null ? current.getUrl() : null;
+        if (urlEditMode || url == null) {
+            urlSecurityIcon.setVisibility(View.GONE);
+            return;
+        }
+        String lower = url.toLowerCase(Locale.ROOT);
+        if (lower.startsWith("https://")) {
+            urlSecurityIcon.setImageResource(R.drawable.ic_lock_small);
+            urlSecurityIcon.setContentDescription("保護された通信");
+            urlSecurityIcon.setVisibility(View.VISIBLE);
+        } else if (lower.startsWith("http://")) {
+            urlSecurityIcon.setImageResource(R.drawable.ic_warning_small);
+            urlSecurityIcon.setContentDescription("保護されていない通信");
+            urlSecurityIcon.setVisibility(View.VISIBLE);
+        } else {
+            urlSecurityIcon.setVisibility(View.GONE);
+        }
+    }
+
+    private void showUrlBarMenu(View anchor) {
+        final BrowserView current = getCurrentWebView();
+        final String url = current != null ? current.getUrl() : null;
+        android.widget.PopupMenu menu = new android.widget.PopupMenu(this, anchor);
+        menu.getMenu().add(0, 1, 1, "URLをコピー").setEnabled(url != null && !url.isEmpty());
+        menu.getMenu().add(0, 2, 2, "貼り付けて移動");
+        menu.getMenu().add(0, 3, 3, "URLを共有").setEnabled(url != null && !url.isEmpty());
+        menu.setOnMenuItemClickListener(item -> {
+            int id = item.getItemId();
+            if (id == 1) {
+                ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null && url != null) {
+                    cm.setPrimaryClip(ClipData.newPlainText("URL", url));
+                    Toast.makeText(SecretActivity.this, "URLをコピーしました", Toast.LENGTH_SHORT).show();
+                }
+                return true;
+            }
+            if (id == 2) {
+                ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                CharSequence text = null;
+                if (cm != null && cm.hasPrimaryClip() && cm.getPrimaryClip() != null && cm.getPrimaryClip().getItemCount() > 0) {
+                    text = cm.getPrimaryClip().getItemAt(0).coerceToText(SecretActivity.this);
+                }
+                if (text == null || text.toString().trim().isEmpty()) {
+                    Toast.makeText(SecretActivity.this, "クリップボードが空です", Toast.LENGTH_SHORT).show();
+                } else {
+                    urlEditText.setText(text.toString().trim());
+                    loadUrl();
+                }
+                return true;
+            }
+            if (id == 3 && url != null) {
+                try {
+                    Intent send = new Intent(Intent.ACTION_SEND);
+                    send.setType("text/plain");
+                    send.putExtra(Intent.EXTRA_TEXT, url);
+                    startActivity(Intent.createChooser(send, "共有"));
+                } catch (Exception ignored) {
+                }
+                return true;
+            }
+            return false;
+        });
+        menu.show();
+    }
+
     private void enterUrlEditMode() {
         if (urlEditMode || urlEditText == null) return;
         urlEditMode = true;
@@ -1354,6 +1508,8 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             faviconImageView.setContentDescription("URL編集を終了");
         }
         if (copyButton != null) copyButton.setVisibility(View.VISIBLE);
+        updateClearButton();
+        updateUrlSecurityIcon();
         if (urlContainer != null) {
             urlContainer.setStrokeColor(ContextCompat.getColor(this, R.color.colorPrimary));
             urlContainer.setStrokeWidth(2);
@@ -1371,6 +1527,8 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         if (!urlEditMode) return;
         urlEditMode = false;
         if (copyButton != null) copyButton.setVisibility(View.GONE);
+        if (clearButton != null) clearButton.setVisibility(View.GONE);
+        updateUrlSecurityIcon();
         if (faviconImageView != null) {
             if (urlEditSavedIcon != null) {
                 faviconImageView.setImageDrawable(urlEditSavedIcon);
@@ -1437,6 +1595,11 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         if (imgItem != null) imgItem.setChecked(imgBlockEnabled);
         MenuItem basicAuthItem = menu.findItem(R.id.action_basic_auth);
         if (basicAuthItem != null) basicAuthItem.setChecked(basicAuthEnabled);
+        MenuItem adBlockItem = menu.findItem(R.id.action_adblock);
+        if (adBlockItem != null) {
+            adBlockItem.setChecked(AdBlockEngine.isEnabled());
+            adBlockItem.setTitle(AdBlockEngine.menuTitle());
+        }
         return super.onPrepareOptionsMenu(menu);
     }
     @Override
@@ -1448,6 +1611,16 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             pref.edit().putBoolean(KEY_DARK_MODE, darkModeEnabled).apply();
             updateDarkMode();
             Toast.makeText(this, "ダークモード " + (darkModeEnabled ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
+        } else if (id == R.id.action_adblock) {
+            boolean enable = !AdBlockEngine.isEnabled();
+            AdBlockEngine.setEnabled(this, enable);
+            item.setChecked(enable);
+            Toast.makeText(this, "AdBlock " + (enable ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
+            BrowserView current = getCurrentWebView();
+            if (current != null) {
+                current.reload();
+            }
+            return true;
         } else if (id == R.id.action_Settings) {
             startActivity(new Intent(SecretActivity.this, SettingsActivity.class));
         } else if (id == R.id.action_keyboard_settings) {
@@ -1461,6 +1634,11 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             startActivity(new Intent(SecretActivity.this, PluginManagerActivity.class));
         } else if (id == R.id.action_plugin_commands) {
             showPluginCommands();
+        } else if (id == R.id.action_fx_addons) {
+            startActivity(new Intent(SecretActivity.this, com.coara.browser2.fx.FxExtensionsActivity.class));
+        } else if (id == R.id.action_fx_actions) {
+            BrowserView fxView = getCurrentWebView();
+            com.coara.browser2.fx.FxActionsDialog.show(this, fxView == null ? null : fxView.getGeckoSession());
         } else if (id == R.id.action_downloads) {
             startActivity(new Intent(SecretActivity.this, DownloadHistoryActivity.class));
         } else if (id == R.id.action_qr) {
@@ -1586,6 +1764,9 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         } else if (id == R.id.action_translate) {
             translatePageToJapanese();
             return true;
+        } else if (id == R.id.action_translate_settings) {
+            TranslateSettingsDialog.show(this, true);
+            return true;
         } else if (id == R.id.action_screenshot) {
             takeScreenshot();
         }
@@ -1608,19 +1789,12 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     }
 
     private void translatePageToJapanese() {
-        String currentUrl = getCurrentWebView().getUrl();
-        if (currentUrl == null || currentUrl.isEmpty()) {
+        BrowserView target = getCurrentWebView();
+        if (target == null) {
             Toast.makeText(SecretActivity.this, "翻訳するページが見つかりません", Toast.LENGTH_SHORT).show();
             return;
         }
-        try {
-            String encodedUrl = URLEncoder.encode(currentUrl, "UTF-8");
-            String translateUrl = "https://translate.google.com/translate?hl=ja&sl=auto&tl=ja&u=" + encodedUrl;
-            getCurrentWebView().loadUrl(translateUrl);
-        } catch (UnsupportedEncodingException e) {
-            Toast.makeText(SecretActivity.this, "翻訳中にエラーが発生しました", Toast.LENGTH_SHORT).show();
-            e.printStackTrace();
-        }
+        PageTranslator.toggle(target, false);
     }
     private void clearSecretDataAndReturnToMain() {
         BrowserView current = webView;
@@ -1647,7 +1821,6 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         }
 
         clearWebStorage();
-        purgeSecretTabPersistence();
 
         BasicAuthManager.clear(SecretActivity.this);
 
@@ -1795,134 +1968,49 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         webView.reload();
         Toast.makeText(SecretActivity.this, "画像ブロック無効", Toast.LENGTH_SHORT).show();
     }
-    @SuppressWarnings("deprecation")
+    private FindInPageController findController;
+    private NetworkStateGuard networkStateGuard;
+
+    private FindInPageController findController() {
+        if (findController == null) {
+            findController = new FindInPageController(this, pref, this::getCurrentWebView);
+        }
+        return findController;
+    }
+
     private void showFindInPageBar() {
-    if (findInPageBarView == null) {
-        LayoutInflater inflater = LayoutInflater.from(this);
-        findInPageBarView = inflater.inflate(R.layout.find_in_page_bar, null);
-        etFindQuery = findInPageBarView.findViewById(R.id.etFindQuery);
-        tvFindCount = findInPageBarView.findViewById(R.id.tvFindCount);
-        btnFindPrev = findInPageBarView.findViewById(R.id.btnFindPrev);
-        btnFindNext = findInPageBarView.findViewById(R.id.btnFindNext);
-        btnFindClose = findInPageBarView.findViewById(R.id.btnFindClose);
+        findController().show();
+    }
 
-        etFindQuery.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
-        KeyboardSettings.applyToEditor(etFindQuery, pref);
-        etFindQuery.setOnEditorActionListener(new TextView.OnEditorActionListener() {
-            @Override
-            public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
-                if (actionId == EditorInfo.IME_ACTION_SEARCH) {
-                    performFindInPage();
-                    return true;
-                }
-                return false;
-            }
-        });
-        etFindQuery.setOnKeyListener(new View.OnKeyListener() {
-            @Override
-            public boolean onKey(View v, int keyCode, KeyEvent event) {
-                if (keyCode == KeyEvent.KEYCODE_ENTER && event.getAction() == KeyEvent.ACTION_DOWN) {
-                    performFindInPage();
-                    return true;
-                }
-                return false;
-            }
-        });
+    private void hideFindInPageBar() {
+        findController().hide();
+    }
 
-        btnFindNext.setOnClickListener(new View.OnClickListener() {
+    private void showHistoryDialog() {
+        HistoryDialog.show(this, historyItems, new HistoryDialog.Host() {
             @Override
-            public void onClick(View v) {
-                if (totalMatches > 0) {
-                    getCurrentWebView().findNext(true, findCallback);
-                }
+            public Bitmap favicon(String url) {
+                return faviconCache.get(url);
             }
-        });
-        btnFindPrev.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (totalMatches > 0) {
-                    getCurrentWebView().findNext(false, findCallback);
-                }
-            }
-        });
-        btnFindClose.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                etFindQuery.setText("");
-                hideFindInPageBar();
-            }
-        });
 
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP);
-        addContentView(findInPageBarView, params);
-    }
-    findInPageBarView.setVisibility(View.VISIBLE);
-    etFindQuery.requestFocus();
-    InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-    if (imm != null) {
-        imm.showSoftInput(etFindQuery, InputMethodManager.SHOW_IMPLICIT);
-    }
-}
-private void performFindInPage() {
-    String query = etFindQuery.getText().toString().trim();
-    if (query.isEmpty()) {
-        getCurrentWebView().clearMatches();
-        tvFindCount.setText("0/0");
-        totalMatches = 0;
-        return;
-    }
-    
-    getCurrentWebView().clearMatches();
-    currentMatchIndex = 0;
-    getCurrentWebView().findAllAsync(query, findCallback);
-}
-private final BrowserView.FindCallback findCallback = new BrowserView.FindCallback() {
-    @Override
-    public void onFindResult(int activeIndex, int total) {
-        currentMatchIndex = activeIndex;
-        totalMatches = total;
-        runOnUiThread(new Runnable() {
             @Override
-            public void run() {
-                if (tvFindCount == null) {
-                    return;
-                }
-                if (totalMatches > 0) {
-                    tvFindCount.setText((currentMatchIndex + 1) + "/" + totalMatches);
-                } else {
-                    tvFindCount.setText("0/0");
+            public void open(String url) {
+                BrowserView current = getCurrentWebView();
+                if (current != null) {
+                    current.loadUrl(url);
                 }
             }
+
+            @Override
+            public void copy(String url) {
+                copyLink(url);
+            }
+
+            @Override
+            public void changed() {
+                saveHistory();
+            }
         });
-    }
-};
-private void hideFindInPageBar() {
-    if (findInPageBarView != null) {
-        findInPageBarView.setVisibility(View.GONE);
-        getCurrentWebView().clearMatches();
-        if (tvFindCount != null) {
-            tvFindCount.setText("0/0");
-        }
-        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-        if (imm != null) {
-            imm.hideSoftInputFromWindow(etFindQuery.getWindowToken(), 0);
-        }
-    }
-}
-private void showHistoryDialog() {
-        RecyclerView recyclerView = new RecyclerView(this);
-        recyclerView.setLayoutManager(new LinearLayoutManager(this));
-        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
-            .setTitle("履歴")
-            .setPositiveButton("閉じる", null)
-            .setView(recyclerView)
-            .create();
-        HistoryAdapter adapter = new HistoryAdapter(historyItems, dialog);
-        recyclerView.setAdapter(adapter);
-        dialog.show();
     }
 
 
@@ -2168,143 +2256,6 @@ private void addHistory(String url, String title) {
     }
 
 
-    private static final class HistoryRow {
-    static final int TYPE_HEADER = 0;
-    static final int TYPE_ITEM = 1;
-
-    final int type;
-    final String header;
-    final HistoryItem item;
-
-    private HistoryRow(int type, String header, HistoryItem item) {
-        this.type = type;
-        this.header = header;
-        this.item = item;
-    }
-
-    static HistoryRow header(String header) {
-        return new HistoryRow(TYPE_HEADER, header, null);
-    }
-
-    static HistoryRow item(HistoryItem item) {
-        return new HistoryRow(TYPE_ITEM, null, item);
-    }
-}
-
-private class HistoryAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
-    private final List<HistoryItem> sourceItems;
-    private final List<HistoryRow> rows = new ArrayList<>();
-    private final AlertDialog dialog;
-    private final SimpleDateFormat headerFormat = new SimpleDateFormat("yyyy/MM/dd", Locale.getDefault());
-    private final SimpleDateFormat groupKeyFormat = new SimpleDateFormat("yyyyMMdd", Locale.getDefault());
-
-    HistoryAdapter(List<HistoryItem> items, AlertDialog dialog) {
-        this.sourceItems = items;
-        this.dialog = dialog;
-        rebuildRows();
-    }
-
-    private void rebuildRows() {
-        rows.clear();
-        String lastGroupKey = null;
-        for (HistoryItem item : sourceItems) {
-            String groupKey = groupKeyFormat.format(new Date(item.getTimestamp()));
-            if (!groupKey.equals(lastGroupKey)) {
-                rows.add(HistoryRow.header(headerFormat.format(new Date(item.getTimestamp()))));
-                lastGroupKey = groupKey;
-            }
-            rows.add(HistoryRow.item(item));
-        }
-    }
-
-    @Override
-    public int getItemViewType(int position) {
-        return rows.get(position).type;
-    }
-
-    @Override
-    public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-        LayoutInflater inflater = LayoutInflater.from(parent.getContext());
-        if (viewType == HistoryRow.TYPE_HEADER) {
-            View view = inflater.inflate(R.layout.item_history_header, parent, false);
-            return new HeaderViewHolder(view);
-        }
-        View view = inflater.inflate(R.layout.item_history, parent, false);
-        return new HistoryViewHolder(view);
-    }
-
-    @Override
-    public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
-        HistoryRow row = rows.get(position);
-        if (holder instanceof HeaderViewHolder) {
-            ((HeaderViewHolder) holder).date.setText(row.header);
-            return;
-        }
-        HistoryItem item = row.item;
-        HistoryViewHolder historyHolder = (HistoryViewHolder) holder;
-        historyHolder.title.setText((item.getTitle() != null && !item.getTitle().isEmpty()) ? item.getTitle() : item.getUrl());
-        historyHolder.url.setText(item.getUrl());
-        Bitmap icon = faviconCache.get(item.getUrl());
-        if (icon != null) {
-            historyHolder.favicon.setImageBitmap(icon);
-        } else {
-            historyHolder.favicon.setImageResource(R.drawable.transparent_vector);
-        }
-        historyHolder.itemView.setOnClickListener(v -> {
-            getCurrentWebView().loadUrl(item.getUrl());
-            dialog.dismiss();
-        });
-        historyHolder.itemView.setOnLongClickListener(v -> {
-            int currentPosition = historyHolder.getBindingAdapterPosition();
-            if (currentPosition == RecyclerView.NO_POSITION) return true;
-            HistoryRow currentRow = rows.get(currentPosition);
-            if (currentRow.type != HistoryRow.TYPE_ITEM || currentRow.item == null) return true;
-            HistoryItem currentItem = currentRow.item;
-            String[] options = {"URLコピー", "削除"};
-            new MaterialAlertDialogBuilder(SecretActivity.this)
-                    .setTitle("操作を選択")
-                    .setItems(options, (dialogInterface, which) -> {
-                        if (which == 0) {
-                            copyLink(currentItem.getUrl());
-                        } else if (which == 1) {
-                            sourceItems.remove(currentItem);
-                            rebuildRows();
-                            notifyDataSetChanged();
-                            saveHistory();
-                            Toast.makeText(SecretActivity.this, "削除しました", Toast.LENGTH_SHORT).show();
-                        }
-                    }).show();
-            return true;
-        });
-    }
-
-    @Override
-    public int getItemCount() {
-        return rows.size();
-    }
-
-    class HeaderViewHolder extends RecyclerView.ViewHolder {
-        TextView date;
-
-        HeaderViewHolder(View itemView) {
-            super(itemView);
-            date = itemView.findViewById(R.id.historyDateHeader);
-        }
-    }
-
-    class HistoryViewHolder extends RecyclerView.ViewHolder {
-        ImageView favicon;
-        TextView title;
-        TextView url;
-
-        HistoryViewHolder(View itemView) {
-            super(itemView);
-            favicon = itemView.findViewById(R.id.historyFavicon);
-            title = itemView.findViewById(R.id.historyTitle);
-            url = itemView.findViewById(R.id.historyUrl);
-        }
-    }
-}
     private class BookmarkAdapter extends RecyclerView.Adapter<BookmarkAdapter.BookmarkViewHolder> {
         private final List<Bookmark> items;
         private final boolean managementMode;

@@ -1,32 +1,39 @@
 package com.coara.browser2;
 
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.util.Base64;
+import android.util.Base64InputStream;
+import android.util.Log;
+import android.view.View;
 import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.Switch;
+import android.widget.Toast;
+
+import androidx.appcompat.app.AppCompatActivity;
+
 import com.coara.browser2.gecko.BrowserClient;
 import com.coara.browser2.gecko.BrowserHost;
 import com.coara.browser2.gecko.BrowserView;
 import com.coara.browser2.gecko.ValueCallback;
-import com.coara.browser2.util.CookieBridge;
-import org.json.JSONTokener;
-import android.widget.Button;
-import android.widget.EditText;
-import android.widget.Switch;
-import android.widget.Toast;
-import androidx.appcompat.app.AppCompatActivity;
 import com.coara.browser2.util.BasicAuthManager;
-import android.os.Handler;
-import android.os.Looper;
-import android.util.Log;
-import android.util.Base64;
-import android.view.View;
+import com.coara.browser2.util.CookieBridge;
+
+import org.json.JSONTokener;
+
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.io.InputStream;
 import java.io.IOException;
-import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -44,19 +51,33 @@ public class pagedl extends AppCompatActivity implements BrowserHost {
     private static final String TAG = "pagedl";
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final int READ_TIMEOUT_MS = 15000;
-    private static final String USER_AGENT = "Mozilla/5.0 (Linux; Android 10; Mobile; rv:89.0) Gecko/89.0 Firefox/89.0";
+    private static final String USER_AGENT = "Mozilla/5.0 (Android 10; Mobile; rv:157.0) Gecko/157.0 Firefox/157.0";
     private static final String ACCEPT_HEADER = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
     private static final String ACCEPT_LANGUAGE = "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7";
+    private static final long SAVE_TIMEOUT_MS = 90000L;
+    private static final long READINESS_TIMEOUT_MS = 6000L;
+    private static final int MAX_SCROLL_STEPS = 30;
+    private static final int SCROLL_DELAY_MS = 140;
+    private static final int READINESS_INTERVAL_MS = 400;
+    private static final int REQUESTED_HTML_WAIT_MS = 1200;
+    private static final String PREPARE_SCRIPT = "(function(){try{var a=document.images;for(var i=0;i<a.length;i++){try{a[i].loading='eager';}catch(e){}}var d=document.documentElement,b=document.body;return Math.max(d?d.scrollHeight:0,b?b.scrollHeight:0);}catch(e){return 0;}})()";
+    private static final String READINESS_SCRIPT = "(function(){try{var p=0,a=document.images;for(var i=0;i<a.length;i++){if(!a[i].complete)p++;}var r=window.performance&&performance.getEntriesByType?performance.getEntriesByType('resource').length:0;return (document.readyState==='complete'?1000000000:0)+(Math.min(p,99)*1000000)+Math.min(r,999999);}catch(e){return 0;}})()";
+    private static final String DUMP_SCRIPT = "(function(){var d=document.doctype;var t=d?'<!DOCTYPE '+d.name+'>\\n':'';return t+document.documentElement.outerHTML;})()";
 
     private EditText urlInput;
     private Switch jsSwitch;
     private Switch localPathSwitch;
     private Button saveButton;
     private BrowserView webView;
-    private volatile boolean isSaving = false;
+    private volatile boolean isSaving;
     private boolean basicAuthEnabled;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private int saveGeneration;
+    private int pageGeneration;
+    private String requestedUrl = "";
+    private boolean captureStarted;
+    private Runnable saveTimeoutRunnable;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -72,91 +93,543 @@ public class pagedl extends AppCompatActivity implements BrowserHost {
         webView.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         ((FrameLayout) findViewById(R.id.webViewHost)).addView(webView);
-        webView.getSettings().setJavaScriptEnabled(jsSwitch.isChecked());
-        jsSwitch.setOnCheckedChangeListener((buttonView, isChecked) ->
-                webView.getSettings().setJavaScriptEnabled(isChecked));
-
+        webView.getSettings().setJavaScriptEnabled(true);
+        installClient();
         saveButton.setOnClickListener(v -> handleSaveButtonClick());
+        urlInput.setOnEditorActionListener((v, actionId, event) -> {
+            handleSaveButtonClick();
+            return true;
+        });
     }
 
-    private void handleSaveButtonClick() {
-        final String urlString = urlInput.getText().toString().trim();
-        if (urlString.isEmpty()) {
-            Toast.makeText(this, "URLを入力してください", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        final String siteName = urlString.replaceAll("[^a-zA-Z0-9]", "_");
-        isSaving = true;
-        if (urlString.startsWith("blob:")) {
-            Toast.makeText(this, "blob: URLはサポートされていません", Toast.LENGTH_LONG).show();
-            isSaving = false;
-            return;
-        }
-        if (urlString.startsWith("data:")) {
-            executor.execute(() -> saveDataUrl(urlString, siteName));
-            return;
-        }
-        if (jsSwitch.isChecked()) {
-            saveWithJavaScriptEnabled(urlString, siteName);
-        } else {
-            executor.execute(() -> saveWithoutJavaScript(urlString, siteName));
-        }
-    }
-
-    private void saveWithJavaScriptEnabled(final String urlString, final String siteName) {
+    private void installClient() {
         webView.setClient(new BrowserClient() {
-            private boolean handled = false;
-
             @Override
             public void onPageStarted(BrowserView view, String url) {
-                handled = false;
+                if (isSaving) {
+                    pageGeneration++;
+                    captureStarted = false;
+                }
             }
 
             @Override
             public void onLoadFailed(BrowserView view, LoadFailure failure) {
-                if (!handled) {
-                    handled = true;
-                    runOnUiThread(() -> Toast.makeText(pagedl.this, "ページを読み込めませんでした", Toast.LENGTH_LONG).show());
-                    isSaving = false;
+                if (isSaving && !captureStarted && requestedUrl.length() > 0) {
+                    captureStarted = true;
+                    failSaving("ページを読み込めませんでした");
                 }
             }
 
             @Override
             public void onPageFinished(BrowserView view, String url) {
-                if (handled) {
+                if (!isSaving || captureStarted || requestedUrl.isEmpty()) {
                     return;
                 }
-                handled = true;
-                handler.postDelayed(() -> view.evaluateJavascript(
-                        "(function(){var d=document.doctype;var t=d?'<!DOCTYPE '+d.name+'>\\n':'';return t+document.documentElement.outerHTML;})()",
-                        value -> {
-                            String html = null;
-                            try {
-                                Object parsed = new JSONTokener(value == null ? "null" : value).nextValue();
-                                if (parsed instanceof String) {
-                                    html = (String) parsed;
-                                }
-                            } catch (Exception ignored) {
-                            }
-                            if (html == null || html.isEmpty()) {
-                                runOnUiThread(() -> Toast.makeText(pagedl.this, "ページ内容を取得できませんでした", Toast.LENGTH_LONG).show());
-                                isSaving = false;
-                                return;
-                            }
-                            final String content = html;
-                            executor.execute(() -> persistHtml(content, urlString, siteName));
-                        }), 3000);
+                captureStarted = true;
+                prepareCapture(saveGeneration, pageGeneration);
             }
         });
-        webView.loadUrl(urlString);
     }
 
-    private void persistHtml(String htmlContent, String urlString, String siteName) {
+    private void handleSaveButtonClick() {
+        if (isSaving) {
+            Toast.makeText(this, "保存処理中です", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (webView == null) {
+            Toast.makeText(this, "画面を開き直してください", Toast.LENGTH_LONG).show();
+            return;
+        }
+        String input = urlInput.getText().toString().trim();
+        if (input.isEmpty()) {
+            Toast.makeText(this, "URLを入力してください", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (input.regionMatches(true, 0, "blob:", 0, 5)) {
+            Toast.makeText(this, "blob: URLはサポートされていません", Toast.LENGTH_LONG).show();
+            return;
+        }
+        final String url = normalizeInputUrl(input);
+        if (url == null) {
+            Toast.makeText(this, "http://、https://、または data: のURLを入力してください", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (url.regionMatches(true, 0, "data:", 0, 5) && !isHtmlDataUrl(url)) {
+            final int token = beginSavingState();
+            executor.execute(() -> saveDataUrl(url, token));
+            return;
+        }
+        final int token = beginSavingState();
+        if (!jsSwitch.isChecked() && url.regionMatches(true, 0, "http", 0, 4)) {
+            final String siteName = siteNameForUrl(url);
+            executor.execute(() -> saveWithoutJavaScript(url, siteName, token));
+            return;
+        }
+        requestedUrl = url;
+        captureStarted = false;
+        webView.getSettings().setJavaScriptEnabled(true);
         try {
-            String pageTitle = extractTitle(htmlContent);
-            String safePageTitle = pageTitle.replaceAll("[^a-zA-Z0-9]", "_");
-            File outputDir = getOutputDirectory(siteName, safePageTitle);
+            webView.loadUrl(url);
+        } catch (Exception e) {
+            Log.e(TAG, "ページ読み込み開始エラー", e);
+            failSaving("ページを開けません: " + e.getMessage());
+        }
+    }
+
+    private String normalizeInputUrl(String input) {
+        String value = input.trim();
+        if (value.regionMatches(true, 0, "data:", 0, 5)) {
+            return value.indexOf(',') > 4 ? value : null;
+        }
+        if (!value.matches("(?i)^https?://.*")) {
+            if (value.matches("(?i)^[a-z][a-z0-9+.-]*:.*")
+                    && !value.matches("(?i)^[^/:\\s]+:\\d+(?:/.*)?$")) {
+                return null;
+            }
+            value = "https://" + value;
+        }
+        Uri uri = Uri.parse(value);
+        String scheme = uri.getScheme();
+        if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https")) || uri.getHost() == null) {
+            return null;
+        }
+        return value;
+    }
+
+    private boolean isHtmlDataUrl(String dataUrl) {
+        int comma = dataUrl.indexOf(',');
+        if (comma < 0) {
+            return false;
+        }
+        String header = dataUrl.substring(0, comma).toLowerCase(Locale.ROOT);
+        return header.startsWith("data:text/html") || header.startsWith("data:application/xhtml+xml");
+    }
+
+    private int beginSavingState() {
+        isSaving = true;
+        saveGeneration++;
+        pageGeneration = 0;
+        requestedUrl = "";
+        captureStarted = false;
+        handler.removeCallbacksAndMessages(null);
+        saveButton.setEnabled(false);
+        saveButton.setText("保存中...");
+        jsSwitch.setEnabled(false);
+        localPathSwitch.setEnabled(false);
+        saveTimeoutRunnable = () -> {
+            if (isSaving) {
+                failSaving("保存処理がタイムアウトしました。ページが重い場合は時間をおいて再試行してください。");
+            }
+        };
+        handler.postDelayed(saveTimeoutRunnable, SAVE_TIMEOUT_MS);
+        return saveGeneration;
+    }
+
+    private void prepareCapture(int token, int pageToken) {
+        if (!isCurrentCapture(token, pageToken)) {
+            return;
+        }
+        if (!jsSwitch.isChecked()) {
+            handler.postDelayed(() -> dumpHtml(token, pageToken), REQUESTED_HTML_WAIT_MS);
+            return;
+        }
+        webView.evaluateJavascript(PREPARE_SCRIPT, value -> {
+            if (!isCurrentCapture(token, pageToken)) {
+                return;
+            }
+            int height = parseJsInteger(value, webView.getHeight());
+            int viewport = Math.max(1, webView.getHeight());
+            if (height > viewport + 100) {
+                scrollPageForCapture(token, pageToken, 0, 0, 0);
+            } else {
+                handler.postDelayed(() -> beginReadinessChecks(token, pageToken), 350L);
+            }
+        });
+    }
+
+    private void scrollPageForCapture(int token, int pageToken, int y, int steps, int bottomStreak) {
+        if (!isCurrentCapture(token, pageToken)) {
+            return;
+        }
+        if (steps >= MAX_SCROLL_STEPS) {
+            finishLazyLoadPass(token, pageToken);
+            return;
+        }
+        int viewport = Math.max(1, webView.getHeight());
+        String script = "(function(){window.scrollTo(0," + y + ");var d=document.documentElement,b=document.body;return Math.max(d?d.scrollHeight:0,b?b.scrollHeight:0);})()";
+        webView.evaluateJavascript(script, value -> {
+            if (!isCurrentCapture(token, pageToken)) {
+                return;
+            }
+            int height = parseJsInteger(value, y + viewport);
+            int maxY = Math.max(0, height - viewport);
+            int nextBottomStreak = y >= maxY ? bottomStreak + 1 : 0;
+            if (steps + 1 >= MAX_SCROLL_STEPS || nextBottomStreak >= 2) {
+                finishLazyLoadPass(token, pageToken);
+                return;
+            }
+            int nextY = Math.min(maxY, y + Math.max(1, (int) (viewport * 0.8f)));
+            if (nextY == y && nextBottomStreak > 0) {
+                finishLazyLoadPass(token, pageToken);
+                return;
+            }
+            handler.postDelayed(() -> scrollPageForCapture(token, pageToken, nextY, steps + 1, nextBottomStreak), SCROLL_DELAY_MS);
+        });
+    }
+
+    private void finishLazyLoadPass(int token, int pageToken) {
+        if (!isCurrentCapture(token, pageToken)) {
+            return;
+        }
+        webView.evaluateJavascript("window.scrollTo(0,0);void(0)", null);
+        handler.postDelayed(() -> beginReadinessChecks(token, pageToken), 350L);
+    }
+
+    private void beginReadinessChecks(int token, int pageToken) {
+        checkReadiness(token, pageToken, SystemClock.elapsedRealtime(), -1, 0);
+    }
+
+    private void checkReadiness(int token, int pageToken, long startedAt, int previousResources, int stableCount) {
+        if (!isCurrentCapture(token, pageToken)) {
+            return;
+        }
+        if (!jsSwitch.isChecked()) {
+            dumpHtml(token, pageToken);
+            return;
+        }
+        webView.evaluateJavascript(READINESS_SCRIPT, value -> {
+            if (!isCurrentCapture(token, pageToken)) {
+                return;
+            }
+            long metric = parseJsLong(value, -1L);
+            long elapsed = SystemClock.elapsedRealtime() - startedAt;
+            if (metric < 0) {
+                if (elapsed >= READINESS_TIMEOUT_MS) {
+                    dumpHtml(token, pageToken);
+                } else {
+                    handler.postDelayed(() -> checkReadiness(token, pageToken, startedAt, previousResources, stableCount), READINESS_INTERVAL_MS);
+                }
+                return;
+            }
+            boolean ready = metric >= 1000000000L;
+            long rest = metric % 1000000000L;
+            long pendingImages = rest / 1000000L;
+            int resources = (int) (rest % 1000000L);
+            int nextStableCount = resources == previousResources ? stableCount + 1 : 0;
+            if ((ready && pendingImages == 0 && nextStableCount >= 2) || elapsed >= READINESS_TIMEOUT_MS) {
+                dumpHtml(token, pageToken);
+            } else {
+                handler.postDelayed(() -> checkReadiness(token, pageToken, startedAt, resources, nextStableCount), READINESS_INTERVAL_MS);
+            }
+        });
+    }
+
+    private void dumpHtml(final int token, final int pageToken) {
+        if (!isCurrentCapture(token, pageToken) || webView == null) {
+            return;
+        }
+        final String finalUrl = webView.getUrl() == null ? requestedUrl : webView.getUrl();
+        webView.evaluateJavascript(DUMP_SCRIPT, value -> {
+            if (!isCurrentCapture(token, pageToken)) {
+                return;
+            }
+            String html = null;
+            try {
+                Object parsed = new JSONTokener(value == null ? "null" : value).nextValue();
+                if (parsed instanceof String) {
+                    html = (String) parsed;
+                }
+            } catch (Exception ignored) {
+            }
+            if (html == null || html.isEmpty()) {
+                failSaving("ページ内容を取得できませんでした");
+                return;
+            }
+            final String content = html;
+            final String siteName = siteNameForUrl(finalUrl);
+            executor.execute(() -> persistHtml(content, finalUrl, siteName, token));
+        });
+    }
+
+    private boolean isCurrentSave(int token) {
+        return isSaving && token == saveGeneration;
+    }
+
+    private boolean isCurrentCapture(int token, int pageToken) {
+        return isSaving && token == saveGeneration && pageToken == pageGeneration && webView != null;
+    }
+
+    private int parseJsInteger(String value, int fallback) {
+        long parsed = parseJsLong(value, fallback);
+        if (parsed < Integer.MIN_VALUE || parsed > Integer.MAX_VALUE) {
+            return fallback;
+        }
+        return (int) parsed;
+    }
+
+    private long parseJsLong(String value, long fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        String normalized = value.trim();
+        if (normalized.startsWith("\"") && normalized.endsWith("\"") && normalized.length() >= 2) {
+            normalized = normalized.substring(1, normalized.length() - 1);
+        }
+        try {
+            return (long) Double.parseDouble(normalized);
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    private String siteNameForUrl(String url) {
+        try {
+            Uri uri = Uri.parse(url);
+            String host = uri.getHost();
+            if (host != null && !host.isEmpty()) {
+                return safeFileName(host, "page");
+            }
+        } catch (Exception ignored) {
+        }
+        return "page";
+    }
+
+    private String safeFileName(String input, String fallback) {
+        String value = input == null ? "" : input.trim();
+        value = value.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").replaceAll("\\s+", "_");
+        value = value.replaceAll("^[. _]+|[. _]+$", "");
+        if (value.isEmpty()) {
+            value = fallback;
+        }
+        if (value.length() > 80) {
+            value = value.substring(0, 80);
+        }
+        return value;
+    }
+
+    private File getOutputDirectory(String siteName, String pageTitle) {
+        File base = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS);
+        if (base == null) {
+            base = new File(getFilesDir(), "documents");
+        }
+        File root = new File(base, "page");
+        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.getDefault()).format(new Date());
+        String folderName = safeFileName(siteName, "page") + "(" + safeFileName(pageTitle, "untitled") + ")_" + timestamp;
+        File output = new File(root, folderName);
+        if (!output.exists() && !output.mkdirs()) {
+            Log.e(TAG, "フォルダー作成失敗: " + output.getAbsolutePath());
+            return null;
+        }
+        if (!output.isDirectory()) {
+            return null;
+        }
+        return output;
+    }
+
+    private void saveDataUrl(String dataUrl, int token) {
+        File output = null;
+        try {
+            if (!isCurrentSave(token)) {
+                return;
+            }
+            int comma = dataUrl.indexOf(',');
+            if (comma < 0) {
+                throw new IOException("data URLの形式が不正です");
+            }
+            String metadata = dataUrl.substring(5, comma);
+            String payload = dataUrl.substring(comma + 1);
+            String[] metadataParts = metadata.split(";");
+            String mimeType = metadataParts.length > 0 && metadataParts[0].contains("/")
+                    ? metadataParts[0].toLowerCase(Locale.ROOT)
+                    : "text/plain";
+            boolean base64 = false;
+            for (String part : metadataParts) {
+                if ("base64".equalsIgnoreCase(part.trim())) {
+                    base64 = true;
+                    break;
+                }
+            }
+            File outputDir = getOutputDirectory("data_url", mimeType);
             if (outputDir == null) {
+                throw new IOException("保存先フォルダーを作成できませんでした");
+            }
+            output = new File(outputDir, "data_content" + extensionForMimeType(mimeType));
+            if (base64) {
+                try (InputStream input = new Base64InputStream(new StringAsciiInputStream(payload), Base64.DEFAULT);
+                     FileOutputStream stream = new FileOutputStream(output)) {
+                    byte[] buffer = new byte[8192];
+                    int count;
+                    while ((count = input.read(buffer)) != -1) {
+                        if (!isCurrentSave(token)) {
+                            throw new IOException("保存処理は終了しました");
+                        }
+                        stream.write(buffer, 0, count);
+                    }
+                    stream.flush();
+                }
+            } else {
+                try (FileOutputStream stream = new FileOutputStream(output)) {
+                    writePercentDecodedPayload(payload, stream, token);
+                    stream.flush();
+                }
+            }
+            if (isCurrentSave(token)) {
+                finishSaving("Data URL保存完了:\n" + output.getAbsolutePath());
+            }
+        } catch (Exception e) {
+            if (!isCurrentSave(token)) {
+                if (output != null && output.isFile()) {
+                    output.delete();
+                }
+                return;
+            }
+            Log.e(TAG, "Data URL保存エラー", e);
+            failSaving("Data URL保存エラー: " + e.getMessage());
+        }
+    }
+
+    private void writePercentDecodedPayload(String payload, FileOutputStream output, int token) throws IOException {
+        int index = 0;
+        while (index < payload.length()) {
+            if ((index & 0x3fff) == 0 && !isCurrentSave(token)) {
+                throw new IOException("保存処理は終了しました");
+            }
+            char current = payload.charAt(index);
+            if (current == '%' && index + 2 < payload.length()) {
+                int high = Character.digit(payload.charAt(index + 1), 16);
+                int low = Character.digit(payload.charAt(index + 2), 16);
+                if (high >= 0 && low >= 0) {
+                    output.write((high << 4) | low);
+                    index += 3;
+                    continue;
+                }
+            }
+            int codePoint = payload.codePointAt(index);
+            if (codePoint <= 0x7f) {
+                output.write(codePoint);
+            } else if (codePoint <= 0x7ff) {
+                output.write(0xc0 | (codePoint >> 6));
+                output.write(0x80 | (codePoint & 0x3f));
+            } else if (codePoint <= 0xffff) {
+                output.write(0xe0 | (codePoint >> 12));
+                output.write(0x80 | ((codePoint >> 6) & 0x3f));
+                output.write(0x80 | (codePoint & 0x3f));
+            } else {
+                output.write(0xf0 | (codePoint >> 18));
+                output.write(0x80 | ((codePoint >> 12) & 0x3f));
+                output.write(0x80 | ((codePoint >> 6) & 0x3f));
+                output.write(0x80 | (codePoint & 0x3f));
+            }
+            index += Character.charCount(codePoint);
+        }
+    }
+
+    private static final class StringAsciiInputStream extends InputStream {
+        private final String source;
+        private int position;
+
+        StringAsciiInputStream(String source) {
+            this.source = source;
+        }
+
+        @Override
+        public int read() {
+            if (position >= source.length()) {
+                return -1;
+            }
+            return source.charAt(position++) & 0xff;
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) {
+            if (length == 0) {
+                return 0;
+            }
+            if (position >= source.length()) {
+                return -1;
+            }
+            int count = Math.min(length, source.length() - position);
+            for (int i = 0; i < count; i++) {
+                buffer[offset + i] = (byte) source.charAt(position++);
+            }
+            return count;
+        }
+    }
+
+    private String extensionForMimeType(String mimeType) {
+        if (mimeType == null) {
+            return ".bin";
+        }
+        String type = mimeType.toLowerCase(Locale.ROOT).split(";")[0].trim();
+        switch (type) {
+            case "text/html": return ".html";
+            case "application/xhtml+xml": return ".xhtml";
+            case "text/plain": return ".txt";
+            case "text/css": return ".css";
+            case "text/javascript":
+            case "application/javascript": return ".js";
+            case "application/json": return ".json";
+            case "application/xml":
+            case "text/xml": return ".xml";
+            case "image/jpeg": return ".jpg";
+            case "image/png": return ".png";
+            case "image/gif": return ".gif";
+            case "image/webp": return ".webp";
+            case "image/svg+xml": return ".svg";
+            case "application/pdf": return ".pdf";
+            case "application/zip": return ".zip";
+            case "audio/mpeg": return ".mp3";
+            case "video/mp4": return ".mp4";
+            default:
+                int slash = type.indexOf('/');
+                if (slash >= 0 && slash + 1 < type.length()) {
+                    String subtype = type.substring(slash + 1).replaceAll("[^a-z0-9.+-]", "");
+                    if (!subtype.isEmpty() && subtype.length() <= 12) {
+                        return "." + subtype;
+                    }
+                }
+                return ".bin";
+        }
+    }
+
+    private void failSaving(String message) {
+        finishSaving(message);
+    }
+
+    private void finishSaving(String message) {
+        runOnUiThread(() -> {
+            if (saveTimeoutRunnable != null) {
+                handler.removeCallbacks(saveTimeoutRunnable);
+                saveTimeoutRunnable = null;
+            }
+            isSaving = false;
+            saveGeneration++;
+            saveButton.setEnabled(webView != null);
+            saveButton.setText("HTML保存開始");
+            jsSwitch.setEnabled(true);
+            localPathSwitch.setEnabled(true);
+            Toast.makeText(pagedl.this, message, Toast.LENGTH_LONG).show();
+        });
+    }
+
+    private void invalidateCurrentCapture() {
+        if (saveTimeoutRunnable != null) {
+            handler.removeCallbacks(saveTimeoutRunnable);
+            saveTimeoutRunnable = null;
+        }
+        isSaving = false;
+        saveGeneration++;
+    }
+
+    private void persistHtml(String htmlContent, String urlString, String siteName, int token) {
+        try {
+            if (!isCurrentSave(token)) {
+                return;
+            }
+            String pageTitle = extractTitle(htmlContent);
+            File outputDir = getOutputDirectory(siteName, pageTitle);
+            if (outputDir == null) {
+                failSaving("保存先フォルダーを作成できませんでした");
                 return;
             }
             String content = htmlContent;
@@ -166,30 +639,25 @@ public class pagedl extends AppCompatActivity implements BrowserHost {
             File htmlFile = new File(outputDir, "page.html");
             Utils.writeStringToFile(htmlFile, content);
             if (htmlFile.exists()) {
-                runOnUiThread(() -> {
-                    Toast.makeText(pagedl.this, "HTML 保存完了：\n" + htmlFile.getAbsolutePath(), Toast.LENGTH_LONG).show();
-                    clearCacheAndCookies();
-                });
+                runOnUiThread(this::clearCacheAndCookies);
+                finishSaving("HTML 保存完了：\n" + htmlFile.getAbsolutePath());
             } else {
-                runOnUiThread(() ->
-                        Toast.makeText(pagedl.this, "HTML ファイルが存在しません", Toast.LENGTH_LONG).show());
+                failSaving("HTML ファイルが存在しません");
             }
         } catch (Exception e) {
             Log.e(TAG, "HTML保存エラー", e);
-            runOnUiThread(() ->
-                    Toast.makeText(pagedl.this, "エラー：" + e.getMessage(), Toast.LENGTH_LONG).show());
-        } finally {
-            isSaving = false;
+            failSaving("エラー：" + e.getMessage());
         }
     }
 
-    private void saveWithoutJavaScript(String urlString, String siteName) {
-        saveWithoutJavaScript(urlString, siteName, null, null, false);
+    private void saveWithoutJavaScript(String urlString, String siteName, int token) {
+        saveWithoutJavaScript(urlString, siteName, token, null, null, false);
     }
 
     private void saveWithoutJavaScript(
             String urlString,
             String siteName,
+            int token,
             String username,
             String password,
             boolean authRetry) {
@@ -236,13 +704,13 @@ public class pagedl extends AppCompatActivity implements BrowserHost {
                         retryRealm,
                         (retryUsername, retryPassword) -> {
                             if (retryUsername == null || retryPassword == null) {
-                                isSaving = false;
-                                Toast.makeText(pagedl.this, "Basic認証をキャンセルしました", Toast.LENGTH_LONG).show();
+                                failSaving("Basic認証をキャンセルしました");
                                 return;
                             }
                             executor.execute(() -> saveWithoutJavaScript(
                                     urlString,
                                     siteName,
+                                    token,
                                     retryUsername,
                                     retryPassword,
                                     true));
@@ -251,8 +719,8 @@ public class pagedl extends AppCompatActivity implements BrowserHost {
             }
             if (responseCode != HttpURLConnection.HTTP_OK) {
                 Log.e(TAG, "HTTP error code: " + responseCode);
-                runOnUiThread(() ->
-                        Toast.makeText(pagedl.this, "HTTP error code: " + responseCode, Toast.LENGTH_LONG).show());
+                waitingForAuth = false;
+                failSaving("HTTP error code: " + responseCode);
                 return;
             }
             StringBuilder html = new StringBuilder();
@@ -264,30 +732,12 @@ public class pagedl extends AppCompatActivity implements BrowserHost {
                 }
             }
             String htmlContent = html.toString();
-            String pageTitle = extractTitle(htmlContent);
-            String safePageTitle = pageTitle.replaceAll("[^a-zA-Z0-9]", "_");
-            File outputDir = getOutputDirectory(siteName, safePageTitle);
-            if (outputDir == null) {
-                return;
-            }
-            if (localPathSwitch.isChecked()) {
-                htmlContent = rewriteHtmlLocalPaths(htmlContent, urlString, outputDir);
-            }
-            File htmlFile = new File(outputDir, "page.html");
-            Utils.writeStringToFile(htmlFile, htmlContent);
-            if (htmlFile.exists()) {
-                runOnUiThread(() -> {
-                    Toast.makeText(pagedl.this, "HTML 保存完了：\n" + htmlFile.getAbsolutePath(), Toast.LENGTH_LONG).show();
-                    clearCacheAndCookies();
-                });
-            } else {
-                runOnUiThread(() ->
-                        Toast.makeText(pagedl.this, "HTML ファイルが存在しません", Toast.LENGTH_LONG).show());
-            }
+            waitingForAuth = true;
+            persistHtml(htmlContent, urlString, siteName, token);
         } catch (Exception e) {
             Log.e(TAG, "HTML保存エラー", e);
-            runOnUiThread(() ->
-                    Toast.makeText(pagedl.this, "エラー：" + e.getMessage(), Toast.LENGTH_LONG).show());
+            waitingForAuth = true;
+            failSaving("エラー：" + e.getMessage());
         } finally {
             if (conn != null) {
                 conn.disconnect();
@@ -316,10 +766,10 @@ public class pagedl extends AppCompatActivity implements BrowserHost {
     @Override
     public void onBackPressed() {
         if (isSaving) {
-            Toast.makeText(this, "保存中はバックキーが無効です", Toast.LENGTH_SHORT).show();
-        } else {
-            super.onBackPressed();
+            Toast.makeText(this, "保存中です。完了またはタイムアウト後に戻ってください。", Toast.LENGTH_SHORT).show();
+            return;
         }
+        super.onBackPressed();
     }
 
     private String rewriteHtmlLocalPaths(String html, String baseUrl, File dir) {
@@ -393,92 +843,26 @@ public class pagedl extends AppCompatActivity implements BrowserHost {
         return "untitled";
     }
 
-    private String getExtensionForMimeType(String mimeType) {
-        if (mimeType == null) {
-            return "";
-        }
-        if (mimeType.contains("html")) {
-            return ".html";
-        } else if (mimeType.contains("jpeg") || mimeType.contains("jpg")) {
-            return ".jpg";
-        } else if (mimeType.contains("png")) {
-            return ".png";
-        } else if (mimeType.contains("gif")) {
-            return ".gif";
-        } else if (mimeType.contains("pdf")) {
-            return ".pdf";
-        }
-        return "";
-    }
-
-    private void saveDataUrl(String dataUrl, String siteName) {
-        String datetime = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date());
-        File baseDir = new File(getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "page");
-        File outputDir = new File(baseDir, datetime);
-        if (!outputDir.exists() && !outputDir.mkdirs()) {
-            isSaving = false;
-            return;
-        }
-        saveDataUrlContent(dataUrl, outputDir, datetime);
-    }
-
-    private void saveDataUrlContent(String dataUrl, File outputDir, String baseName) {
-        try {
-            int commaIndex = dataUrl.indexOf(",");
-            if (commaIndex == -1) {
-                throw new IOException("data URL の形式が不正です");
-            }
-            String header = dataUrl.substring(0, commaIndex);
-            String base64Data = dataUrl.substring(commaIndex + 1);
-            String mimeType = "application/octet-stream";
-            Pattern pattern = Pattern.compile("data:([^;]+);base64");
-            Matcher matcher = pattern.matcher(header);
-            if (matcher.find()) {
-                mimeType = matcher.group(1);
-            }
-            String extension = getExtensionForMimeType(mimeType);
-            String fileName = baseName + extension;
-            File outFile = new File(outputDir, fileName);
-            byte[] data = Base64.decode(base64Data, Base64.DEFAULT);
-            try (FileOutputStream fos = new FileOutputStream(outFile)) {
-                fos.write(data);
-            }
-            runOnUiThread(() -> {
-                Toast.makeText(pagedl.this, "保存完了：\n" + outFile.getAbsolutePath(), Toast.LENGTH_LONG).show();
-                clearCacheAndCookies();
-            });
-        } catch (Exception e) {
-            Log.e(TAG, "Data URL 保存エラー", e);
-            runOnUiThread(() ->
-                    Toast.makeText(pagedl.this, "Data URL 保存エラー：" + e.getMessage(), Toast.LENGTH_LONG).show());
-        } finally {
-            isSaving = false;
-        }
-    }
-
-    private File getOutputDirectory(String siteName, String safePageTitle) {
-        File baseDir = new File(getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "page");
-        File outputDir = new File(baseDir, siteName + "(" + safePageTitle + ")/データ保存");
-        if (!outputDir.exists() && !outputDir.mkdirs()) {
-            Log.e(TAG, "フォルダ作成失敗: " + outputDir.getAbsolutePath());
-            runOnUiThread(() ->
-                    Toast.makeText(pagedl.this, "フォルダ作成失敗: " + outputDir.getAbsolutePath(), Toast.LENGTH_LONG).show());
-            return null;
-        }
-        return outputDir;
-    }
-
     @Override
     protected void onDestroy() {
+        invalidateCurrentCapture();
         BasicAuthManager.cancelPendingForActivity(pagedl.this);
-        if (webView != null) {
+        handler.removeCallbacksAndMessages(null);
+        BrowserView current = webView;
+        if (current != null) {
+            View parentView = current.getParent() instanceof View ? (View) current.getParent() : null;
+            if (parentView instanceof ViewGroup) {
+                ((ViewGroup) parentView).removeView(current);
+            }
             try {
-                webView.destroy();
+                current.stopLoading();
+                current.destroy();
             } catch (Exception ignored) {
             }
+            webView = null;
         }
-        super.onDestroy();
         executor.shutdownNow();
+        super.onDestroy();
     }
 
     @Override
@@ -530,30 +914,4 @@ class Utils {
             fos.write(content.getBytes(StandardCharsets.UTF_8));
         }
     }
-}
-
-class MimeParser {
-    public static String rewriteContentLocations(String mhtContent, File dir) {
-        Pattern pattern = Pattern.compile("(?im)^(Content-Location:\\s*)(http[s]?://\\S+)$");
-        Matcher matcher = pattern.matcher(mhtContent);
-        StringBuffer sb = new StringBuffer();
-        while (matcher.find()) {
-            String originalUrl = matcher.group(2).trim();
-            try {
-                URL url = new URL(originalUrl);
-                String fileName = new File(url.getPath()).getName();
-                if (fileName.isEmpty()) {
-                    fileName = "index.html";
-                }
-                String localPath = "file://" + dir.getAbsolutePath() + "/" + fileName;
-                String replacement = matcher.group(1) + localPath;
-                matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
-            } catch (Exception e) {
-                matcher.appendReplacement(sb, Matcher.quoteReplacement(matcher.group(0)));
-            }
-        }
-        matcher.appendTail(sb);
-        return sb.toString();
-    }
-
 }
