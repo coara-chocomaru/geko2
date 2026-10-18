@@ -7,7 +7,7 @@
         android:icon="@drawable/ic_bookmark_add"
         android:title="ブックマーク登録"
         app:showAsAction="never" />
-    <item android:title="ブックマーク管理">
+    <item android:icon="@drawable/ic_bookmarks" android:title="ブックマーク管理">
         <menu>
             <item
                 android:id="@+id/action_bookmark_management"
@@ -26,25 +26,21 @@
                 app:showAsAction="never" />
         </menu>
     </item>
+    <item android:id="@+id/action_tabs" android:icon="@drawable/ic_tabs" android:title="タブ一覧" />
+    <item android:id="@+id/action_clear_tabs" android:icon="@drawable/ic_delete" android:title="タブをクリア" />
+    <item android:id="@+id/action_history" android:icon="@drawable/ic_history" android:title="ページ履歴" />
+    <item android:id="@+id/action_downloads" android:icon="@drawable/ic_download" android:title="ダウンロード一覧" />
+    <item android:id="@+id/action_fx_addons" android:icon="@drawable/ic_add" android:title="Firefox拡張機能(アドオン)" app:showAsAction="never" />
+    <item android:id="@+id/action_find_in_page" android:icon="@drawable/ic_search" android:title="ページ内検索" app:showAsAction="never" />
+    <item android:id="@+id/action_deskua" android:icon="@drawable/ic_globe" android:title="デスクトップ表示" android:checkable="true" />
+    <item android:id="@+id/action_translate" android:icon="@drawable/ic_translate" android:title="ページを翻訳" />
+    <item android:id="@+id/action_screenshot" android:icon="@drawable/ic_screenshot" android:title="スクリーンショット" />
 
-    <item android:id="@+id/action_tabs" android:title="タブ一覧" />
-    <item android:id="@+id/action_clear_tabs" android:title="タブをクリア" />
-    <item
-        android:id="@+id/action_find_in_page"
-        android:icon="@drawable/ic_search"
-        android:title="ページ内検索"
-        app:showAsAction="never" />
-    <item android:id="@+id/action_screenshot" android:title="スクリーンショット" />
-    <item android:id="@+id/action_history" android:title="ページ履歴" />
-    <item android:id="@+id/action_downloads" android:title="ダウンロード一覧" />
-
-    <item android:title="表示設定">
+    <item android:icon="@drawable/ic_settings" android:title="表示設定">
         <menu>
             <item android:id="@+id/action_dark_mode" android:title="ダークモード" android:checkable="true" />
             <item android:id="@+id/action_zoom_toggle" android:title="ズーム" android:checkable="true" />
             <item android:id="@+id/action_negapoji" android:title="ネガポジ" />
-            <item android:id="@+id/action_deskua" android:title="デスクトップ表示" android:checkable="true" />
-            <item android:id="@+id/action_translate" android:title="ページを翻訳" />
             <item android:id="@+id/action_translate_settings" android:title="翻訳設定" />
             <item android:id="@+id/action_text_color" android:title="テキストカラー選択" />
             <item android:id="@+id/action_font_family" android:title="フォント切り替え" />
@@ -54,7 +50,7 @@
         </menu>
     </item>
 
-    <item android:title="軽量オプション">
+    <item android:icon="@drawable/ic_blockbg" android:title="軽量オプション">
         <menu>
             <item android:id="@+id/action_ua" android:title="ガラケーUA" android:checkable="true" />
             <item android:id="@+id/action_js" android:title="Javascript" android:checkable="true" />
@@ -62,14 +58,14 @@
         </menu>
     </item>
 
-    <item android:title="入力・操作">
+    <item android:icon="@drawable/ic_edit" android:title="入力・操作">
         <menu>
             <item android:id="@+id/action_keyboard_settings" android:title="キーボード設定" />
             <item android:id="@+id/action_touchpad" android:title="タッチパッドボタン" />
         </menu>
     </item>
 
-    <item android:title="ツール">
+    <item android:icon="@drawable/ic_terminal" android:title="ツール">
         <menu>
             <item android:id="@+id/action_adblock" android:title="AdBlock" android:checkable="true" app:showAsAction="never" />
             <item android:id="@+id/action_Secret" android:icon="@drawable/ic_dark_mode" android:title="シークレットモード" app:showAsAction="never" />
@@ -79,7 +75,6 @@
             <item android:id="@+id/action_basic_auth" android:icon="@drawable/ic_globe" android:title="basicモード" android:checkable="true" app:showAsAction="never" />
             <item android:id="@+id/action_plugins" android:title="拡張機能(プラグイン)" app:showAsAction="never" />
             <item android:id="@+id/action_plugin_commands" android:title="プラグインコマンド" app:showAsAction="never" />
-            <item android:id="@+id/action_fx_addons" android:title="Firefox拡張機能" app:showAsAction="never" />
             <item android:id="@+id/action_fx_actions" android:title="Firefox拡張機能の操作" app:showAsAction="never" />
             <item android:id="@+id/action_txtphoto" android:icon="@drawable/ic_txtphoto" android:title="TXT→画像" app:showAsAction="never" />
             <item android:id="@+id/action_asciiart" android:icon="@drawable/ic_asciiart" android:title="画像→TXT" app:showAsAction="never" />
@@ -90,7 +85,7 @@
         </menu>
     </item>
 
-    <item android:title="保護・履歴消去">
+    <item android:icon="@drawable/ic_lock_small" android:title="保護・履歴消去">
         <menu>
             <item android:id="@+id/action_pin_settings" android:title="起動保護" />
             <item android:id="@+id/action_clear_cookies" android:title="クッキーを消去" />
@@ -100,6 +95,6 @@
         </menu>
     </item>
 
-    <item android:id="@+id/action_Settings" android:title="info" />
+    <item android:id="@+id/action_Settings" android:icon="@drawable/ic_info" android:title="info" />
 
 </menu>
