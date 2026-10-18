@@ -471,7 +471,7 @@ public class FxExtensionsActivity extends AppCompatActivity implements FxExtensi
         if (error != null) {
             Toast.makeText(this, error, Toast.LENGTH_LONG).show();
         } else if (ext != null) {
-            String name = ext.metaData.name == null ? ext.id : ext.metaData.name;
+            String name = FxExtensionManager.nameOf(ext);
             Toast.makeText(this, "「" + name + "」を追加しました", Toast.LENGTH_SHORT).show();
         }
         adapter.notifyDataSetChanged();
@@ -515,13 +515,14 @@ public class FxExtensionsActivity extends AppCompatActivity implements FxExtensi
     private void showDetail(final WebExtension e) {
         StringBuilder sb = new StringBuilder();
         WebExtension.MetaData m = e.metaData;
-        sb.append("バージョン: ").append(m.version).append('\n');
+        sb.append("バージョン: ").append(FxExtensionManager.clean(m.version).isEmpty() ? "-" : m.version).append('\n');
         if (m.creatorName != null && !m.creatorName.isEmpty()) {
             sb.append("作者: ").append(m.creatorName).append('\n');
         }
         sb.append("ID: ").append(e.id).append('\n');
-        if (m.description != null && !m.description.isEmpty()) {
-            sb.append('\n').append(m.description).append('\n');
+        String desc = FxExtensionManager.descriptionOf(e);
+        if (!desc.isEmpty()) {
+            sb.append('\n').append(desc).append('\n');
         }
         List<String> labels = FxPermissions.labels(m.requiredPermissions, m.requiredOrigins);
         sb.append("\n権限:");
@@ -541,7 +542,7 @@ public class FxExtensionsActivity extends AppCompatActivity implements FxExtensi
         ScrollView sv = new ScrollView(this);
         sv.addView(body);
         AlertDialog.Builder b = new AlertDialog.Builder(this)
-                .setTitle(m.name == null ? e.id : m.name)
+                .setTitle(FxExtensionManager.nameOf(e))
                 .setView(sv)
                 .setPositiveButton("閉じる", null);
         if (m.homepageUrl != null && !m.homepageUrl.isEmpty()) {
@@ -560,7 +561,7 @@ public class FxExtensionsActivity extends AppCompatActivity implements FxExtensi
     }
 
     private void confirmRemove(final WebExtension e) {
-        String name = e.metaData.name == null ? e.id : e.metaData.name;
+        String name = FxExtensionManager.nameOf(e);
         new AlertDialog.Builder(this)
                 .setTitle("削除")
                 .setMessage("「" + name + "」を削除しますか?拡張機能のデータも消去されます。")
@@ -770,9 +771,9 @@ public class FxExtensionsActivity extends AppCompatActivity implements FxExtensi
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(dp(12), 0, dp(8), 0);
-        String name = e.metaData.name == null || e.metaData.name.isEmpty() ? e.id : e.metaData.name;
+        String name = FxExtensionManager.nameOf(e);
         col.addView(text(name, 16f, textPrimary, true));
-        col.addView(text("v" + e.metaData.version + (e.metaData.enabled ? "" : "  (無効)"), 12f, textSecondary, false));
+        col.addView(text("v" + (FxExtensionManager.clean(e.metaData.version).isEmpty() ? "-" : e.metaData.version) + (e.metaData.enabled ? "" : "  (無効)"), 12f, textSecondary, false));
         top.addView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         final Switch sw = new Switch(this);
         sw.setChecked(e.metaData.enabled);
@@ -786,8 +787,8 @@ public class FxExtensionsActivity extends AppCompatActivity implements FxExtensi
         });
         top.addView(sw);
         card.addView(top);
-        if (e.metaData.description != null && !e.metaData.description.isEmpty()) {
-            TextView d = text(e.metaData.description, 13f, textPrimary, false);
+        if (!FxExtensionManager.descriptionOf(e).isEmpty()) {
+            TextView d = text(FxExtensionManager.descriptionOf(e), 13f, textPrimary, false);
             d.setMaxLines(2);
             d.setEllipsize(android.text.TextUtils.TruncateAt.END);
             d.setPadding(0, dp(8), 0, 0);

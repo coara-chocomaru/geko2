@@ -106,26 +106,50 @@ public final class AmoClient {
         return out;
     }
 
+    private static String str(JSONObject o, String key) {
+        if (o == null) {
+            return "";
+        }
+        Object v = o.opt(key);
+        if (v == null || v == JSONObject.NULL) {
+            return "";
+        }
+        String t = v instanceof String ? (String) v : String.valueOf(v);
+        return "null".equals(t) ? "" : t.trim();
+    }
+
+    private static String strAt(JSONArray a, int i) {
+        if (a == null) {
+            return "";
+        }
+        Object v = a.opt(i);
+        if (v == null || v == JSONObject.NULL) {
+            return "";
+        }
+        return String.valueOf(v);
+    }
+
     private static String localized(Object value) {
         if (value == null || value == JSONObject.NULL) {
             return "";
         }
         if (value instanceof String) {
-            return (String) value;
+            String t = ((String) value).trim();
+            return "null".equals(t) ? "" : t;
         }
         if (value instanceof JSONObject) {
             JSONObject o = (JSONObject) value;
             String current = lang();
             String[] keys = {current, current.contains("-") ? current.substring(0, current.indexOf('-')) : current, "en-US"};
             for (String key : keys) {
-                String v = o.optString(key, "");
+                String v = str(o, key);
                 if (!v.isEmpty()) {
                     return v;
                 }
             }
             java.util.Iterator<String> it = o.keys();
             while (it.hasNext()) {
-                String v = o.optString(it.next(), "");
+                String v = str(o, it.next());
                 if (!v.isEmpty()) {
                     return v;
                 }
@@ -138,10 +162,11 @@ public final class AmoClient {
         if (o == null) {
             return null;
         }
-        String guid = o.optString("guid", "");
+        String guid = str(o, "guid");
         JSONObject version = o.optJSONObject("current_version");
+        String slug = str(o, "slug");
         JSONObject file = version == null ? null : version.optJSONObject("file");
-        String download = file == null ? "" : file.optString("url", "");
+        String download = file == null ? "" : str(file, "url");
         if (guid.isEmpty() || download.isEmpty()) {
             return null;
         }
@@ -150,7 +175,7 @@ public final class AmoClient {
         if (authors != null && authors.length() > 0) {
             JSONObject a = authors.optJSONObject(0);
             if (a != null) {
-                author = a.optString("name", "");
+                author = str(a, "name");
             }
         }
         double rating = 0;
@@ -163,12 +188,12 @@ public final class AmoClient {
         boolean recommended = false;
         Object promoted = o.opt("promoted");
         if (promoted instanceof JSONObject) {
-            recommended = "recommended".equals(((JSONObject) promoted).optString("category", ""));
+            recommended = "recommended".equals(str((JSONObject) promoted, "category"));
         } else if (promoted instanceof JSONArray) {
             JSONArray list = (JSONArray) promoted;
             for (int i = 0; i < list.length(); i++) {
                 JSONObject p = list.optJSONObject(i);
-                if (p != null && "recommended".equals(p.optString("category", ""))) {
+                if (p != null && "recommended".equals(str(p, "category"))) {
                     recommended = true;
                 }
             }
@@ -178,18 +203,28 @@ public final class AmoClient {
             JSONArray pa = file.optJSONArray("permissions");
             if (pa != null) {
                 for (int i = 0; i < pa.length(); i++) {
-                    perms.add(pa.optString(i));
+                    String pv = strAt(pa, i);
+                    if (!pv.isEmpty()) {
+                        perms.add(pv);
+                    }
                 }
             }
             JSONArray ha = file.optJSONArray("host_permissions");
             if (ha != null) {
                 for (int i = 0; i < ha.length(); i++) {
-                    perms.add(ha.optString(i));
+                    String hv = strAt(ha, i);
+                    if (!hv.isEmpty()) {
+                        perms.add(hv);
+                    }
                 }
             }
         }
-        return new AmoAddon(guid, localized(o.opt("name")), localized(o.opt("summary")), o.optString("icon_url", ""),
-                download, o.optString("url", ""), author, rating, count, o.optLong("average_daily_users", 0),
+        String title = localized(o.opt("name"));
+        if (title.isEmpty()) {
+            title = slug.isEmpty() ? guid : slug;
+        }
+        return new AmoAddon(guid, title, localized(o.opt("summary")), str(o, "icon_url"),
+                download, str(o, "url"), author, rating, count, o.optLong("average_daily_users", 0),
                 recommended, perms.toArray(new String[0]));
     }
 

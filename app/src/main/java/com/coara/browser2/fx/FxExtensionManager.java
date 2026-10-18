@@ -179,8 +179,8 @@ public final class FxExtensionManager {
                     }
                 }
                 Collections.sort(next, (a, b) -> {
-                    String an = a.metaData.name == null ? a.id : a.metaData.name;
-                    String bn = b.metaData.name == null ? b.id : b.metaData.name;
+                    String an = nameOf(a);
+                    String bn = nameOf(b);
                     return an.compareToIgnoreCase(bn);
                 });
                 synchronized (installed) {
@@ -376,7 +376,7 @@ public final class FxExtensionManager {
             if (t != null && !t.isEmpty()) {
                 return t;
             }
-            return extension.metaData.name == null ? extension.id : extension.metaData.name;
+            return nameOf(extension);
         }
 
         public boolean enabled() {
@@ -476,9 +476,24 @@ public final class FxExtensionManager {
         }
     };
 
-    private static String nameOf(WebExtension e) {
-        String n = e.metaData.name;
-        return n == null || n.isEmpty() ? e.id : n;
+    static String clean(String v) {
+        if (v == null) {
+            return "";
+        }
+        String t = v.trim();
+        if (t.isEmpty() || "null".equals(t) || "undefined".equals(t) || (t.startsWith("__MSG_") && t.endsWith("__"))) {
+            return "";
+        }
+        return t;
+    }
+
+    public static String nameOf(WebExtension e) {
+        String n = clean(e.metaData == null ? null : e.metaData.name);
+        return n.isEmpty() ? e.id : n;
+    }
+
+    public static String descriptionOf(WebExtension e) {
+        return clean(e.metaData == null ? null : e.metaData.description);
     }
 
     private GeckoResult<WebExtension.PermissionPromptResponse> askInstall(final WebExtension extension,
