@@ -20,14 +20,26 @@
       background: linear-gradient(135deg, #ff9a9e 0%, #fad0c4 100%);
       font-family: "Comic Sans MS", cursive, sans-serif;
       position: relative;
-      animation: bgShift 20s ease-in-out infinite;
       background-size: cover;
       background-position: center;
     }
+    body::before {
+      content: "";
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      z-index: 0;
+      pointer-events: none;
+      background: linear-gradient(135deg, #ffae9a 0%, #f8dcc4 100%);
+      opacity: 0;
+      animation: bgShift 20s ease-in-out infinite;
+    }
+    body.custom-bg::before { display: none; }
     @keyframes bgShift {
-      0% { filter: hue-rotate(0deg) contrast(1); }
-      50% { filter: hue-rotate(20deg) contrast(1.1); }
-      100% { filter: hue-rotate(0deg) contrast(1); }
+      0%, 100% { opacity: 0; }
+      50% { opacity: 0.4; }
     }
     .container {
       display: flex;
@@ -64,7 +76,7 @@
       border: 2px solid #ffb6c1;
       border-radius: 30px;
       outline: none;
-      transition: all 0.3s ease;
+      transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
       background: #fff;
       box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
@@ -94,7 +106,6 @@
       position: absolute;
       pointer-events: none;
       animation-timing-function: ease-in-out;
-      will-change: transform, opacity;
     }
     .fluffy.snow { animation: floatSnow 8s forwards; }
     @keyframes floatSnow {
@@ -249,9 +260,16 @@
     const patterns = ['snow', 'feather', 'petal', 'bubble', 'leaf', 'star', 'cloud', 'sparkle'];
     const patternSymbols = { snow: '❄', feather: '🪶', petal: '❀', bubble: '○', leaf: '🍂', star: '★', cloud: '☁', sparkle: '✨', bird: '🐦' };
     const patternTop = { snow: "-10vh", feather: "110vh", petal: "-10vh", bubble: "110vh", leaf: "-10vh", star: "110vh", cloud: null, sparkle: null };
+    const reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const MAX_FLUFFY = 14;
+    let fluffyTimer = 0;
+    let birdTimer = 0;
+    function spawn(div, seconds) {
+      div.addEventListener('animationend', () => div.remove(), { once: true });
+      document.body.appendChild(div);
+    }
     function createFluffy() {
-      const fluffies = document.querySelectorAll('.fluffy');
-      if (fluffies.length > 30) return;
+      if (document.hidden || document.getElementsByClassName('fluffy').length >= MAX_FLUFFY) return;
       const pattern = patterns[Math.floor(Math.random() * patterns.length)];
       const div = document.createElement('div');
       div.classList.add('fluffy', pattern);
@@ -259,29 +277,37 @@
       div.style.left = Math.random() * 100 + 'vw';
       div.style.top = patternTop[pattern] ? patternTop[pattern] : Math.random() * 100 + 'vh';
       div.style.fontSize = (16 + Math.random() * 14) + 'px';
-      const duration = 8 + Math.random() * 8;
-      div.style.animationDuration = duration + 's';
-      document.body.appendChild(div);
-      setTimeout(() => div.remove(), duration * 1000);
+      div.style.animationDuration = (8 + Math.random() * 8) + 's';
+      spawn(div);
     }
-    setInterval(createFluffy, 1000);
-
     function createBird() {
+      if (document.hidden) return;
       const div = document.createElement('div');
       div.classList.add('fluffy', 'bird');
       div.textContent = patternSymbols['bird'];
       div.style.top = (10 + Math.random() * 60) + 'vh';
       div.style.fontSize = '24px';
-      const duration = 12;
-      div.style.animationDuration = duration + 's';
-      document.body.appendChild(div);
-      setTimeout(() => div.remove(), duration * 1000);
+      div.style.animationDuration = '12s';
+      spawn(div);
     }
     function scheduleBird() {
-      const delay = 15000 + Math.random() * 20000;
-      setTimeout(() => { createBird(); scheduleBird(); }, delay);
+      birdTimer = setTimeout(() => { createBird(); scheduleBird(); }, 15000 + Math.random() * 20000);
     }
-    scheduleBird();
+    function startFx() {
+      if (reduceMotion || fluffyTimer) return;
+      fluffyTimer = setInterval(createFluffy, 1400);
+      scheduleBird();
+    }
+    function stopFx() {
+      clearInterval(fluffyTimer);
+      clearTimeout(birdTimer);
+      fluffyTimer = 0;
+      birdTimer = 0;
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) stopFx(); else startFx();
+    });
+    startFx();
 
     const inputField = document.querySelector('input[type="text"]');
     inputField.addEventListener('focus', () => inputField.style.transform = 'scale(1.05)');
@@ -327,15 +353,18 @@
     const MAX_SIZE_LOWER = 2 * 1024 * 1024;
     const MAX_SIZE_UPPER = 8 * 1024 * 1024;
 
-    addEventListener('DOMContentLoaded', () => {
+    try {
       const savedBg = localStorage.getItem('bgImage');
-      if (savedBg) document.body.style.backgroundImage = `url(${savedBg})`;
-    });
+      if (savedBg) {
+        document.body.style.backgroundImage = `url(${savedBg})`;
+        document.body.classList.add('custom-bg');
+      }
+    } catch (e) {}
 
     bgSelector.addEventListener('change', e => {
       const file = e.target.files[0];
       if (!file || file.size > MAX_SIZE_UPPER) {
-        if (file.size > MAX_SIZE_UPPER) alert("8MBを超える画像はサポートしていません。");
+        if (file && file.size > MAX_SIZE_UPPER) alert("8MBを超える画像はサポートしていません。");
         return;
       }
       const reader = new FileReader();
@@ -353,20 +382,23 @@
             const ctx = canvas.getContext('2d', { alpha: false });
             ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
             const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
-            localStorage.setItem('bgImage', optimizedDataUrl);
+            try { localStorage.setItem('bgImage', optimizedDataUrl); } catch (e) {}
             document.body.style.backgroundImage = `url(${optimizedDataUrl})`;
+            document.body.classList.add('custom-bg');
           };
           img.src = dataUrl;
         } else {
-          localStorage.setItem('bgImage', dataUrl);
+          try { localStorage.setItem('bgImage', dataUrl); } catch (e) {}
           document.body.style.backgroundImage = `url(${dataUrl})`;
+          document.body.classList.add('custom-bg');
         }
       };
       reader.readAsDataURL(file);
     });
 
     bgClear.addEventListener('click', () => {
-      localStorage.removeItem('bgImage');
+      try { localStorage.removeItem('bgImage'); } catch (e) {}
+      document.body.classList.remove('custom-bg');
       document.body.style.backgroundImage = 'none';
       document.body.style.background = 'linear-gradient(135deg, #ff9a9e 0%, #fad0c4 100%)';
     });
