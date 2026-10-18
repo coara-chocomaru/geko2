@@ -22,6 +22,7 @@ import android.graphics.Canvas;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Message;
@@ -234,18 +235,29 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private BrowserView fullScreenView = null;
     private int fullScreenPreviousOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
     private final Map<BrowserView, Bitmap> tabSnapshots = new LinkedHashMap<>();
-    private static final int MAX_MEMORY_SNAPSHOTS = 8;
+    private static final int MAX_MEMORY_SNAPSHOTS = 6;
     private final Map<BrowserView, Runnable> pendingSpaHistoryTasks = new HashMap<>();
     
     
     
     private final Map<BrowserView, Boolean> pullToRefreshEligibleCache = new HashMap<>();
     private final Map<BrowserView, PendingTab> pendingTabs = new HashMap<>();
-    private final Set<BrowserView> reconcileTabs = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
     private final Set<BrowserView> staleTabs = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
     private final Map<BrowserView, TabHistoryStore.State> tabHistoryStates = new HashMap<>();
     private final Set<BrowserView> backNavigationTabs = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
-    private final Map<BrowserView, Integer> virtualBase = new WeakHashMap<>();
+    private final Map<BrowserView, ArrayList<TabHistoryStore.Entry>> historyPrefix = new WeakHashMap<>();
+    private final Map<BrowserView, TabHistoryStore.State> restoreSeeds = new WeakHashMap<>();
+    private final Map<BrowserView, VirtualBackGuard> virtualBackGuards = new WeakHashMap<>();
+
+    private static final class VirtualBackGuard {
+        final String url;
+        final long at;
+
+        VirtualBackGuard(String url, long at) {
+            this.url = url;
+            this.at = at;
+        }
+    }
     private final Set<BrowserView> popupTabs = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
     private final Map<BrowserView, Runnable> stateSaveTasks = new HashMap<>();
     private final ExecutorService persistExecutor = UiThread.newPool(1);
@@ -311,6 +323,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
         pref = getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
         tabHistoryStore = new TabHistoryStore(getFilesDir(), MAX_TAB_HISTORY_SIZE);
+        BrowserMenuController.setQuickActions(this, this::buildQuickActions);
         pluginManager = PluginManager.get(this);
         pluginManager.addListener(this);
         lastPluginRuntimeVersion = pluginManager.runtimeVersion();
@@ -673,9 +686,48 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         }
     }
 
-    private int virtualCount(BrowserView view) {
-        Integer b = virtualBase.get(view);
-        return b == null ? 0 : b;
+    private static String normalizeEntryUrl(String u) {
+        if (u == null) {
+            return "";
+        }
+        String t = u.trim();
+        int hash = t.indexOf('#');
+        if (hash >= 0) {
+            t = t.substring(0, hash);
+        }
+        while (t.length() > 1 && t.endsWith("/")) {
+            t = t.substring(0, t.length() - 1);
+        }
+        return t.toLowerCase(Locale.ROOT);
+    }
+
+    private static boolean sameEntryUrl(String a, String b) {
+        return normalizeEntryUrl(a).equals(normalizeEntryUrl(b));
+    }
+
+    private void seedHistory(BrowserView view, TabHistoryStore.State stored) {
+        if (view == null) {
+            return;
+        }
+        virtualBackGuards.remove(view);
+        if (stored == null || stored.isEmpty()) {
+            restoreSeeds.remove(view);
+            historyPrefix.remove(view);
+            return;
+        }
+        List<TabHistoryStore.Entry> all = stored.getEntries();
+        int cur = Math.max(0, Math.min(stored.getCurrentIndex(), all.size() - 1));
+        historyPrefix.put(view, new ArrayList<>(all.subList(0, cur)));
+        restoreSeeds.put(view, new TabHistoryStore.State(all, cur));
+    }
+
+    private void resetHistoryTracking(BrowserView view) {
+        if (view == null) {
+            return;
+        }
+        historyPrefix.remove(view);
+        restoreSeeds.remove(view);
+        virtualBackGuards.remove(view);
     }
 
     private void mergeHistoryFromEngine(BrowserView view, NavHistory h, boolean sync) {
@@ -708,35 +760,50 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         if (geckoCur < 0) {
             geckoCur = geckoEntries.size() - 1;
         }
-        TabHistoryStore.State prev = getTabHistoryState(view);
-        if (reconcileTabs.remove(view) && prev != null && !prev.isEmpty()) {
-            int storedIdx = Math.max(0, prev.getCurrentIndex());
-            TabHistoryStore.Entry storedCur = prev.getCurrent();
-            int base;
-            if (storedCur != null && storedCur.getUrl().equals(geckoEntries.get(geckoCur).getUrl())) {
-                base = Math.max(0, storedIdx - geckoCur);
-            } else if (geckoEntries.size() >= prev.size()) {
-                base = 0;
+        VirtualBackGuard guard = virtualBackGuards.get(view);
+        if (guard != null) {
+            if (sameEntryUrl(geckoEntries.get(geckoCur).getUrl(), guard.url)
+                    || SystemClock.uptimeMillis() - guard.at > 6000L) {
+                virtualBackGuards.remove(view);
             } else {
-                base = storedIdx;
-            }
-            virtualBase.put(view, Math.min(base, prev.size()));
-        }
-        ArrayList<TabHistoryStore.Entry> entries = new ArrayList<>();
-        int base = virtualCount(view);
-        if (prev != null && base > 0) {
-            List<TabHistoryStore.Entry> pe = prev.getEntries();
-            for (int i = 0; i < base && i < pe.size(); i++) {
-                entries.add(pe.get(i));
+                return;
             }
         }
+        ArrayList<TabHistoryStore.Entry> prefix = historyPrefix.get(view);
+        if (prefix == null) {
+            prefix = new ArrayList<>();
+        }
+        TabHistoryStore.State seed = restoreSeeds.get(view);
+        if (seed != null && !seed.isEmpty()) {
+            List<TabHistoryStore.Entry> s = seed.getEntries();
+            int off = seed.getCurrentIndex() - geckoCur;
+            boolean ok = off >= 0 && off + geckoEntries.size() <= s.size();
+            if (ok) {
+                for (int i = 0; i < geckoEntries.size(); i++) {
+                    if (!sameEntryUrl(s.get(off + i).getUrl(), geckoEntries.get(i).getUrl())) {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if (ok) {
+                prefix = new ArrayList<>(s.subList(0, off));
+            } else {
+                restoreSeeds.remove(view);
+            }
+        }
+        TabHistoryStore.State prev = getTabHistoryState(view);
+        ArrayList<TabHistoryStore.Entry> entries = new ArrayList<>(prefix);
         int realBase = entries.size();
         entries.addAll(geckoEntries);
         int cur = realBase + geckoCur;
         TabHistoryStore.State next = new TabHistoryStore.State();
         next.replace(entries, cur, MAX_TAB_HISTORY_SIZE);
         int start = Math.max(0, entries.size() - Math.max(1, MAX_TAB_HISTORY_SIZE));
-        virtualBase.put(view, Math.max(0, realBase - start));
+        if (start > 0) {
+            prefix = new ArrayList<>(prefix.subList(Math.min(start, prefix.size()), prefix.size()));
+        }
+        historyPrefix.put(view, prefix);
         if (prev != null && prev.contentEquals(next)) {
             return;
         }
@@ -784,34 +851,96 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             view.goBack();
             return true;
         }
-        int base = virtualCount(view);
-        TabHistoryStore.State state = getTabHistoryState(view);
-        if (base <= 0 || state == null) {
+        ArrayList<TabHistoryStore.Entry> prefix = historyPrefix.get(view);
+        if (prefix == null || prefix.isEmpty()) {
             return false;
         }
-        List<TabHistoryStore.Entry> all = state.getEntries();
-        if (base > all.size()) {
-            return false;
-        }
-        TabHistoryStore.Entry previous = all.get(base - 1);
+        TabHistoryStore.Entry previous = prefix.get(prefix.size() - 1);
         if (previous == null || previous.getUrl().isEmpty()) {
             return false;
         }
-        TabHistoryStore.State next = new TabHistoryStore.State(new ArrayList<>(all.subList(0, base)), base - 1);
-        virtualBase.put(view, base - 1);
+        String target = BrowserAssetLoader.normalizeLegacyAssetUrl(previous.getUrl());
+        ArrayList<TabHistoryStore.Entry> remaining = new ArrayList<>(prefix.subList(0, prefix.size() - 1));
+        ArrayList<TabHistoryStore.Entry> all = new ArrayList<>(remaining);
+        all.add(previous);
+        TabHistoryStore.State next = new TabHistoryStore.State(all, remaining.size());
+        historyPrefix.put(view, remaining);
+        restoreSeeds.remove(view);
         tabHistoryStates.put(view, next);
         int id = getTabId(view);
         if (id >= 0) {
             persistHistory(id, next, false);
         }
+        virtualBackGuards.put(view, new VirtualBackGuard(target, SystemClock.uptimeMillis()));
         backNavigationTabs.add(view);
         try {
-            view.loadUrlReplacingHistory(BrowserAssetLoader.normalizeLegacyAssetUrl(previous.getUrl()));
+            view.loadUrlReplacingHistory(target);
             return true;
         } catch (Exception ignored) {
             backNavigationTabs.remove(view);
+            virtualBackGuards.remove(view);
+            prefix.add(previous);
+            historyPrefix.put(view, prefix);
             return false;
         }
+    }
+
+    private boolean canGoBackAny(BrowserView view) {
+        if (view == null) {
+            return false;
+        }
+        if (view.canGoBack()) {
+            return true;
+        }
+        NavHistory h = view.copyBackForwardList();
+        if (h != null && h.getCurrentIndex() > 0) {
+            return true;
+        }
+        ArrayList<TabHistoryStore.Entry> prefix = historyPrefix.get(view);
+        return prefix != null && !prefix.isEmpty();
+    }
+
+    private List<BrowserMenuController.QuickAction> buildQuickActions() {
+        final BrowserView cur = getCurrentWebView();
+        String url = cur == null ? null : cur.getUrl();
+        boolean hasPage = url != null && !url.isEmpty() && !url.equals(START_PAGE);
+        List<BrowserMenuController.QuickAction> out = new ArrayList<>();
+        out.add(new BrowserMenuController.QuickAction(R.drawable.ic_arrow_back, "戻る", canGoBackAny(cur),
+                () -> getOnBackPressedDispatcher().onBackPressed()));
+        out.add(new BrowserMenuController.QuickAction(R.drawable.ic_arrow_forward, "進む", cur != null && cur.canGoForward(),
+                () -> {
+                    BrowserView v = getCurrentWebView();
+                    if (v != null) {
+                        v.goForward();
+                    }
+                }));
+        out.add(new BrowserMenuController.QuickAction(R.drawable.ic_refresh, "更新", cur != null,
+                () -> {
+                    BrowserView v = getCurrentWebView();
+                    if (v != null) {
+                        v.reload();
+                    }
+                }));
+        boolean bookmarked = hasPage && isBookmarkedUrl(url);
+        out.add(new BrowserMenuController.QuickAction(bookmarked ? R.drawable.ic_star_filled : R.drawable.ic_star_outline,
+                "ブックマーク", hasPage,
+                () -> {
+                    if (toolbar != null) {
+                        toolbar.getMenu().performIdentifierAction(R.id.action_add_bookmark, 0);
+                    }
+                }));
+        final String shareUrl = url;
+        out.add(new BrowserMenuController.QuickAction(R.drawable.ic_share, "共有", hasPage,
+                () -> {
+                    try {
+                        Intent send = new Intent(Intent.ACTION_SEND);
+                        send.setType("text/plain");
+                        send.putExtra(Intent.EXTRA_TEXT, shareUrl);
+                        startActivity(Intent.createChooser(send, "共有"));
+                    } catch (Exception ignored) {
+                    }
+                }));
+        return out;
     }
 
     private void schedulePluginReload() {
@@ -1083,9 +1212,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             }
         }
         if (sessionRestored) {
-            int storedIdx = historyState.isEmpty() ? 0 : Math.max(0, historyState.getCurrentIndex());
-            virtualBase.put(webView, storedIdx);
-            reconcileTabs.add(webView);
+            seedHistory(webView, historyState);
             final BrowserView guarded = webView;
             UiThread.mainHandler().postDelayed(() -> {
                 if (!webViews.contains(guarded) || pendingTabs.containsKey(guarded) || target == null || target.isEmpty()) {
@@ -1093,14 +1220,13 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 }
                 String now = guarded.getUrl();
                 if (now == null || now.isEmpty() || now.equals("about:blank")) {
-                    int idx = tabHistoryStates.get(guarded) != null ? Math.max(0, tabHistoryStates.get(guarded).getCurrentIndex()) : 0;
-                    virtualBase.put(guarded, idx);
+                    seedHistory(guarded, tabHistoryStates.get(guarded));
                     guarded.loadUrl(target);
                 }
             }, 3500L);
             return;
         }
-        virtualBase.put(webView, current != null ? Math.max(0, historyState.getCurrentIndex()) : 0);
+        seedHistory(webView, historyState);
         if (target != null && !target.isEmpty()) {
             try {
                 webView.loadUrl(target);
@@ -1522,6 +1648,8 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             } catch (JSONException e) {
                 e.printStackTrace();
                 tabHistoryStates.clear();
+                historyPrefix.clear();
+                restoreSeeds.clear();
                 pendingTabs.clear();
                 BrowserView initialWebView = createNewWebView();
                 initialWebView.setTag(nextTabId);
@@ -2211,7 +2339,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 tabHistoryStates.put(replacement, carried);
             }
             backNavigationTabs.remove(crashed);
-            virtualBase.remove(crashed);
+            resetHistoryTracking(crashed);
             popupTabs.remove(crashed);
             webViews.set(index, replacement);
             if (wasExternal) {
@@ -3888,6 +4016,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 tabHistoryStore.delete(currentId);
             }
             tabHistoryStates.remove(current);
+            resetHistoryTracking(current);
             backNavigationTabs.remove(current);
             try {
                 current.clearHistory();
