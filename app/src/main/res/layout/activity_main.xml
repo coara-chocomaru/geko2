@@ -16,7 +16,7 @@
             android:layout_width="match_parent"
             android:layout_height="56dp"
             android:background="@drawable/bg_browser_toolbar"
-            android:elevation="6dp"
+            android:elevation="2dp"
             android:minHeight="56dp"
             app:contentInsetStart="0dp"
             app:contentInsetEnd="0dp"
@@ -33,17 +33,17 @@
                 android:orientation="horizontal"
                 android:paddingStart="12dp"
                 android:paddingEnd="12dp"
-                android:paddingTop="8dp"
-                android:paddingBottom="8dp">
+                android:paddingTop="6dp"
+                android:paddingBottom="6dp">
 
                 <com.google.android.material.card.MaterialCardView
                     android:id="@+id/urlContainer"
                     android:layout_width="0dp"
-                    android:layout_height="40dp"
+                    android:layout_height="44dp"
                     android:layout_weight="1"
                     android:foreground="?attr/selectableItemBackground"
                     app:cardBackgroundColor="@android:color/transparent"
-                    app:cardCornerRadius="20dp"
+                    app:cardCornerRadius="22dp"
                     app:cardElevation="0dp"
                     app:strokeColor="#D9E0E7"
                     app:strokeWidth="1dp">
@@ -81,7 +81,7 @@
                             android:layout_weight="1"
                             android:background="@null"
                             android:gravity="center_vertical"
-                            android:hint="Search or type URL"
+                            android:hint="検索またはアドレスを入力"
                             android:imeOptions="actionGo"
                             android:includeFontPadding="false"
                             android:inputType="textUri"
@@ -90,9 +90,9 @@
                             android:maxLines="1"
                             android:selectAllOnFocus="true"
                             android:singleLine="true"
-                            android:textColor="@android:color/black"
-                            android:textColorHint="#69707A"
-                            android:textSize="15sp" />
+                            android:textColor="#15141A"
+                            android:textColorHint="#5B5B66"
+                            android:textSize="16sp" />
 
                         <ImageView
                             android:id="@+id/bookmarkStar"
