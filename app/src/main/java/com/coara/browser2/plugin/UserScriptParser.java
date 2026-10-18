@@ -220,8 +220,8 @@ public final class UserScriptParser {
             }
         }
         if (entry.matches.isEmpty()) {
-            entry.matches.addAll(PluginPatterns.DEFAULT_MATCHES);
-            warnings.add("@match/@includeが無いためhttp/https全ページを対象にします");
+            entry.matches.addAll(PluginPatterns.NO_MATCH_LIST);
+            warnings.add("@match/@includeが無いため、どのページにも実行されません。対象サイトを@matchで指定してください");
         }
         String runAt = m.runAt.toLowerCase(Locale.US);
         if (runAt.equals("document-body")) {

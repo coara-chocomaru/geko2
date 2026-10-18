@@ -291,6 +291,23 @@ public class PluginManagerActivity extends AppCompatActivity implements PluginMa
 
     private static void appendEntries(StringBuilder sb, PluginInfo info) {
         List<PluginEntry> entries = info.entries();
+        boolean allSites = false;
+        boolean noTarget = true;
+        for (PluginEntry e : entries) {
+            List<String> eff = PluginPatterns.effectiveMatches(e.matches);
+            if (PluginPatterns.hasAllSites(eff)) {
+                allSites = true;
+            }
+            if (!PluginPatterns.isNoMatch(eff)) {
+                noTarget = false;
+            }
+        }
+        if (allSites) {
+            sb.append("⚠ すべてのHTTP/HTTPSサイトで実行されます\n");
+        }
+        if (noTarget && !entries.isEmpty()) {
+            sb.append("⚠ 対象サイトの指定が無く、どのページにも実行されません\n");
+        }
         sb.append("スクリプト定義: ").append(entries.size()).append("件\n");
         for (int i = 0; i < entries.size() && i < 6; i++) {
             PluginEntry e = entries.get(i);

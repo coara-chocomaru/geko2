@@ -10,6 +10,9 @@ import java.util.regex.Pattern;
 
 public final class PluginPatterns {
     public static final List<String> DEFAULT_MATCHES;
+    public static final String NO_MATCH = "/(?!)/";
+    public static final List<String> NO_MATCH_LIST = java.util.Collections.singletonList(NO_MATCH);
+    private static final String NO_MATCH_ORIGIN = "https://no-match.invalid";
 
     private static final Map<String, Pattern> PATTERN_CACHE = new ConcurrentHashMap<>();
     private static final String SPECIALS = "\\.[]{}()+^$|";
@@ -106,6 +109,10 @@ public final class PluginPatterns {
                 continue;
             }
             String p = raw.trim();
+            if (p.equals(NO_MATCH)) {
+                out.add(NO_MATCH_ORIGIN);
+                continue;
+            }
             if (p.isEmpty() || p.equals("*") || p.equalsIgnoreCase("<all_urls>")) {
                 fallback = true;
                 continue;
@@ -137,6 +144,32 @@ public final class PluginPatterns {
             out.add("*");
         }
         return out;
+    }
+
+    public static boolean isAllSites(String pattern) {
+        if (pattern == null) {
+            return false;
+        }
+        String p = pattern.trim().toLowerCase(java.util.Locale.US);
+        return p.equals("*") || p.equals("<all_urls>") || p.equals("http://*") || p.equals("https://*")
+                || p.equals("*://*") || p.equals("http://*/*") || p.equals("https://*/*") || p.equals("*://*/*")
+                || p.equals("^https?://.*") || p.equals("/^https?:\\/\\/.*$/");
+    }
+
+    public static boolean hasAllSites(List<String> patterns) {
+        if (patterns == null) {
+            return false;
+        }
+        for (String p : patterns) {
+            if (isAllSites(p)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static boolean isNoMatch(List<String> patterns) {
+        return patterns != null && patterns.size() == 1 && NO_MATCH.equals(patterns.get(0));
     }
 
     private static void addOrigin(Set<String> out, String scheme, String host) {

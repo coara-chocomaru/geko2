@@ -2,6 +2,7 @@ package com.coara.browser2.plugin;
 
 import android.util.Base64;
 import com.coara.browser2.util.CookieBridge;
+import com.coara.browser2.util.CookieSitePolicy;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -43,36 +44,138 @@ final class PluginHttp {
     private PluginHttp() {
     }
 
+    private static long parseLooseIpv4(String h) {
+        if (h.isEmpty()) {
+            return -1L;
+        }
+        String[] parts = h.split("\\.", -1);
+        if (parts.length > 4) {
+            return -1L;
+        }
+        long[] v = new long[parts.length];
+        for (int i = 0; i < parts.length; i++) {
+            String t = parts[i];
+            if (t.isEmpty()) {
+                return -1L;
+            }
+            try {
+                if (t.startsWith("0x") || t.startsWith("0X")) {
+                    if (t.length() == 2) {
+                        return -1L;
+                    }
+                    v[i] = Long.parseLong(t.substring(2), 16);
+                } else if (t.length() > 1 && t.charAt(0) == '0') {
+                    v[i] = Long.parseLong(t.substring(1), 8);
+                } else {
+                    v[i] = Long.parseLong(t, 10);
+                }
+            } catch (NumberFormatException e) {
+                return -1L;
+            }
+            if (v[i] < 0) {
+                return -1L;
+            }
+        }
+        long result;
+        switch (parts.length) {
+            case 1:
+                if (v[0] > 0xFFFFFFFFL) {
+                    return -1L;
+                }
+                result = v[0];
+                break;
+            case 2:
+                if (v[0] > 0xFF || v[1] > 0xFFFFFFL) {
+                    return -1L;
+                }
+                result = (v[0] << 24) | v[1];
+                break;
+            case 3:
+                if (v[0] > 0xFF || v[1] > 0xFF || v[2] > 0xFFFFL) {
+                    return -1L;
+                }
+                result = (v[0] << 24) | (v[1] << 16) | v[2];
+                break;
+            default:
+                if (v[0] > 0xFF || v[1] > 0xFF || v[2] > 0xFF || v[3] > 0xFF) {
+                    return -1L;
+                }
+                result = (v[0] << 24) | (v[1] << 16) | (v[2] << 8) | v[3];
+                break;
+        }
+        return result;
+    }
+
+    private static boolean isPrivateIpv4(long ip) {
+        int a = (int) ((ip >> 24) & 0xFF);
+        int b = (int) ((ip >> 16) & 0xFF);
+        return a == 10 || a == 127 || a == 0 || (a == 169 && b == 254) || (a == 172 && b >= 16 && b <= 31)
+                || (a == 192 && b == 168) || (a == 100 && b >= 64 && b <= 127) || a >= 224;
+    }
+
     static boolean isPrivateHost(String host) {
         if (host == null) {
             return true;
         }
         String h = host.toLowerCase(Locale.US);
-        if (h.startsWith("[")) {
+        while (h.endsWith(".")) {
+            h = h.substring(0, h.length() - 1);
+        }
+        if (h.isEmpty() || h.startsWith("[") || h.indexOf(':') >= 0) {
             return true;
         }
-        if (h.equals("localhost") || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")) {
+        if (h.equals("localhost") || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")
+                || h.endsWith(".lan") || h.endsWith(".home.arpa") || h.indexOf('.') < 0 && parseLooseIpv4(h) < 0) {
             return true;
         }
-        String[] p = h.split("\\.");
-        if (p.length == 4) {
-            try {
-                int a = Integer.parseInt(p[0]);
-                int b = Integer.parseInt(p[1]);
-                Integer.parseInt(p[2]);
-                Integer.parseInt(p[3]);
-                return a == 10 || a == 127 || a == 0 || (a == 169 && b == 254) || (a == 172 && b >= 16 && b <= 31)
-                        || (a == 192 && b == 168) || (a == 100 && b >= 64 && b <= 127);
-            } catch (NumberFormatException ignored) {
-            }
+        long ip = parseLooseIpv4(h);
+        if (ip >= 0) {
+            return isPrivateIpv4(ip);
         }
         return false;
     }
 
+    private static boolean isIpLiteral(String host) {
+        return host.indexOf(':') >= 0 || host.startsWith("[") || parseLooseIpv4(host) >= 0;
+    }
+
+    private static boolean resolvesToPrivate(String host) {
+        if (isIpLiteral(host)) {
+            return false;
+        }
+        try {
+            java.net.InetAddress[] addrs = java.net.InetAddress.getAllByName(host);
+            for (java.net.InetAddress a : addrs) {
+                if (a.isAnyLocalAddress() || a.isLoopbackAddress() || a.isLinkLocalAddress()
+                        || a.isSiteLocalAddress() || a.isMulticastAddress()) {
+                    return true;
+                }
+                byte[] raw = a.getAddress();
+                if (raw.length == 4) {
+                    long ip = ((raw[0] & 0xFFL) << 24) | ((raw[1] & 0xFFL) << 16) | ((raw[2] & 0xFFL) << 8) | (raw[3] & 0xFFL);
+                    if (isPrivateIpv4(ip)) {
+                        return true;
+                    }
+                } else if (raw.length == 16 && (raw[0] & 0xFE) == 0xFC) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
     static boolean hostAllowed(List<String> connects, String url, String originHost) {
         String host;
+        String scheme;
         try {
-            host = new URL(url).getHost();
+            URL u = new URL(url);
+            host = u.getHost();
+            scheme = u.getProtocol();
+            if (u.getUserInfo() != null) {
+                return false;
+            }
         } catch (Exception e) {
             return false;
         }
@@ -80,6 +183,10 @@ final class PluginHttp {
             return false;
         }
         host = host.toLowerCase(Locale.US);
+        while (host.endsWith(".")) {
+            host = host.substring(0, host.length() - 1);
+        }
+        boolean secure = "https".equalsIgnoreCase(scheme);
         String origin = originHost == null ? "" : originHost.toLowerCase(Locale.US);
         boolean priv = isPrivateHost(host);
         if (host.equals(origin)) {
@@ -88,16 +195,19 @@ final class PluginHttp {
         if (connects != null) {
             for (String c : connects) {
                 String e = c.trim().toLowerCase(Locale.US);
+                if (e.isEmpty()) {
+                    continue;
+                }
                 if (e.equals("*")) {
-                    if (!priv) {
+                    if (secure && !priv && !resolvesToPrivate(host)) {
                         return true;
                     }
                     continue;
                 }
-                if (e.isEmpty()) {
-                    continue;
+                if (host.equals(e)) {
+                    return true;
                 }
-                if (host.equals(e) || (!priv && host.endsWith("." + e))) {
+                if (!priv && host.endsWith("." + e) && (secure || !isIpLiteral(host)) && !resolvesToPrivate(host)) {
                     return true;
                 }
             }
@@ -183,7 +293,7 @@ final class PluginHttp {
                         c.setRequestProperty("User-Agent", opts.optString("ua", "Mozilla/5.0 (Linux; Android 10) CoaraBrowser"));
                     }
                     if (!anonymous && !hasCookie) {
-                        String cookie = CookieBridge.getCookieHeader(current);
+                        String cookie = CookieSitePolicy.cookieFor(current);
                         if (cookie != null && !cookie.isEmpty()) {
                             c.setRequestProperty("Cookie", cookie);
                         }
@@ -199,7 +309,7 @@ final class PluginHttp {
                         c.getOutputStream().flush();
                     }
                     int code = c.getResponseCode();
-                    if (!anonymous) {
+                    if (!anonymous && !CookieSitePolicy.isBlockAllActive()) {
                         Map<String, List<String>> hf = c.getHeaderFields();
                         List<String> sc = hf == null ? null : hf.get("Set-Cookie");
                         if (sc != null) {
@@ -210,7 +320,11 @@ final class PluginHttp {
                         String loc = c.getHeaderField("Location");
                         if (loc != null && !loc.isEmpty() && redirects < MAX_REDIRECTS && !opts.optBoolean("noRedirect", false)) {
                             redirects++;
-                            current = new URL(new URL(current), loc).toString();
+                            String next = new URL(new URL(current), loc).toString();
+                            if (current.regionMatches(true, 0, "https://", 0, 8) && !next.regionMatches(true, 0, "https://", 0, 8)) {
+                                return errorPayload("blocked https to http redirect: " + hostOf(next));
+                            }
+                            current = next;
                             if (code == 301 || code == 302 || code == 303) {
                                 if (!method.equals("HEAD")) {
                                     method = "GET";

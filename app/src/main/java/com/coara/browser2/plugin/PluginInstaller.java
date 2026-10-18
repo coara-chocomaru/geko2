@@ -285,7 +285,8 @@ public final class PluginInstaller {
             }
         }
         if (info.matches.isEmpty()) {
-            info.matches.addAll(PluginPatterns.DEFAULT_MATCHES);
+            info.matches.addAll(PluginPatterns.NO_MATCH_LIST);
+            warnings.add("plgmatchesが無いため、どのページにも実行されません。対象サイトをplgmatchesで指定してください");
         }
         for (String p : PluginPatterns.parseList(attrs.get("plgexcludes"))) {
             if (PluginPatterns.toRegex(p) == null) {
