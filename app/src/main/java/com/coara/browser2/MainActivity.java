@@ -245,6 +245,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private final Map<BrowserView, PendingTab> pendingTabs = new HashMap<>();
     private final Set<BrowserView> staleTabs = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
     private final Map<BrowserView, TabHistoryStore.State> tabHistoryStates = new HashMap<>();
+    private final Set<BrowserView> seedAlignedTabs = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
     private final Set<BrowserView> backNavigationTabs = Collections.newSetFromMap(new WeakHashMap<BrowserView, Boolean>());
     private final Map<BrowserView, ArrayList<TabHistoryStore.Entry>> historyPrefix = new WeakHashMap<>();
     private final Map<BrowserView, TabHistoryStore.State> restoreSeeds = new WeakHashMap<>();
@@ -728,7 +729,14 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         return out;
     }
 
+    private static boolean isStartLike(String u) {
+        return u != null && (u.startsWith(START_PAGE) || u.startsWith("data:text/html"));
+    }
+
     private static boolean sameEntryUrl(String a, String b) {
+        if (isStartLike(a) && isStartLike(b)) {
+            return true;
+        }
         return normalizeEntryUrl(a).equals(normalizeEntryUrl(b));
     }
 
@@ -737,6 +745,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             return;
         }
         virtualBackGuards.remove(view);
+        seedAlignedTabs.remove(view);
         if (stored == null || stored.isEmpty()) {
             restoreSeeds.remove(view);
             historyPrefix.remove(view);
@@ -755,6 +764,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         historyPrefix.remove(view);
         restoreSeeds.remove(view);
         virtualBackGuards.remove(view);
+        seedAlignedTabs.remove(view);
     }
 
     private void mergeHistoryFromEngine(BrowserView view, NavHistory h, boolean sync) {
@@ -815,8 +825,12 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             }
             if (ok) {
                 prefix = new ArrayList<>(s.subList(0, off));
+                seedAlignedTabs.add(view);
             } else {
                 restoreSeeds.remove(view);
+                if (!seedAlignedTabs.contains(view)) {
+                    prefix = new ArrayList<>();
+                }
             }
         }
         TabHistoryStore.State prev = getTabHistoryState(view);
@@ -1088,6 +1102,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
     @Override
     protected void onResume() {
+        BrowserEngine.get().getAgent().setThirdPartyCookieListener(this::onThirdPartyCookieFromAgent);
         if (networkStateGuard == null) {
             networkStateGuard = new NetworkStateGuard(this, () -> {
                 synchronized (webViews) {
@@ -1144,6 +1159,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
     @Override
     protected void onPause() {
+        BrowserEngine.get().getAgent().setThirdPartyCookieListener(null);
         if (networkStateGuard != null) {
             networkStateGuard.stop();
         }
@@ -1789,6 +1805,26 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     public void requestStorageAccess(BrowserView view, String topUrlHint, String frameOrigin,
                                      ValueCallback<Boolean> callback) {
         cookieGate(view, topUrlHint, frameOrigin, true, callback);
+    }
+
+    private void onThirdPartyCookieFromAgent(String topUrl, String requestUrl) {
+        BrowserView current = getCurrentWebView();
+        if (current == null || isFinishing() || isDestroyed() || pendingTabs.containsKey(current)) {
+            return;
+        }
+        String currentUrl = current.getUrl();
+        if (!BrowserUrlRouter.isWebUrl(currentUrl)) {
+            return;
+        }
+        String topSite = CookieSite.siteOf(CookieSitePolicy.hostOf(topUrl));
+        if (topSite.isEmpty() || !topSite.equals(CookieSite.siteOf(CookieSitePolicy.hostOf(currentUrl)))) {
+            return;
+        }
+        cookieGate(current, topUrl, requestUrl, false, new ValueCallback<Boolean>() {
+            @Override
+            public void onReceiveValue(Boolean value) {
+            }
+        });
     }
 
     @Override
