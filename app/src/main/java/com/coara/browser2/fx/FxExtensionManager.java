@@ -44,6 +44,10 @@ public final class FxExtensionManager {
         GeckoSession openExtensionTab(boolean active);
 
         void openUrl(String url);
+
+        boolean closeExtensionSession(GeckoSession session);
+
+        void activateSession(GeckoSession session);
     }
 
     public interface InstallCallback {
@@ -239,6 +243,10 @@ public final class FxExtensionManager {
             session.getWebExtensionController().setActionDelegate(extension, sessionActionDelegate);
         } catch (Throwable ignored) {
         }
+        try {
+            session.getWebExtensionController().setTabDelegate(extension, sessionTabDelegate);
+        } catch (Throwable ignored) {
+        }
     }
 
     public void onSessionAttached(GeckoSession session, boolean active) {
@@ -336,6 +344,29 @@ public final class FxExtensionManager {
         }
         return FxPopup.show(a, r);
     }
+
+    private final WebExtension.SessionTabDelegate sessionTabDelegate = new WebExtension.SessionTabDelegate() {
+        @Override
+        public GeckoResult<AllowOrDeny> onCloseTab(WebExtension source, GeckoSession session) {
+            TabHost host = tabHost.get();
+            if (host != null && host.closeExtensionSession(session)) {
+                return GeckoResult.allow();
+            }
+            return GeckoResult.deny();
+        }
+
+        @Override
+        public GeckoResult<AllowOrDeny> onUpdateTab(WebExtension extension, GeckoSession session,
+                                                    WebExtension.UpdateTabDetails details) {
+            if (details != null && details.active != null && details.active) {
+                TabHost host = tabHost.get();
+                if (host != null) {
+                    host.activateSession(session);
+                }
+            }
+            return GeckoResult.allow();
+        }
+    };
 
     private final WebExtension.TabDelegate tabDelegate = new WebExtension.TabDelegate() {
         @Override
