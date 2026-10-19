@@ -584,7 +584,7 @@ public final class BrowserMenuController {
                 if (q.enabled) {
                     cell.setOnClickListener(v -> {
                         dismissAll();
-                        if (q.action != null) content.post(q.action);
+                        if (q.action != null) new android.os.Handler(android.os.Looper.getMainLooper()).post(q.action);
                     });
                 }
                 LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, cellHeight, 1f);

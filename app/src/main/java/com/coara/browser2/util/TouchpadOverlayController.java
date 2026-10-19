@@ -134,6 +134,7 @@ public final class TouchpadOverlayController {
             TouchpadController.setActive(false);
             if (overlay != null) {
                 overlay.setVisibility(View.GONE);
+                TouchpadController.refreshSurface();
             }
             visible = false;
         }
@@ -246,6 +247,7 @@ public final class TouchpadOverlayController {
     }
 
     private static void detachViewOnly() {
+        boolean hadOverlay = overlay != null;
         if (overlay != null) {
             View parent = (View) overlay.getParent();
             if (parent instanceof android.view.ViewGroup) {
@@ -254,6 +256,9 @@ public final class TouchpadOverlayController {
         }
         overlay = null;
         surfaceView = null;
+        if (hadOverlay) {
+            TouchpadController.refreshSurface();
+        }
     }
 
     private static boolean isUsable(Activity activity) {

@@ -137,6 +137,13 @@ public final class TouchpadController {
         flushScheduled = false;
     }
 
+    public static void refreshSurface() {
+        BrowserView view = currentWebView.get();
+        if (view != null) {
+            view.refreshSurface();
+        }
+    }
+
     public static void setCurrentWebView(BrowserView webView) {
         BrowserView current = currentWebView.get();
         if (current == webView) {
