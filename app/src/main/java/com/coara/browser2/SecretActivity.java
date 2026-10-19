@@ -787,6 +787,10 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     }
 
     @Override
+    public void onThirdPartyCookieBlocked(BrowserView view, String blockedUri) {
+    }
+
+    @Override
     public void requestAuth(BrowserView view, String host, String realm, boolean previousFailed, String presetUser,
                             String presetPassword, BrowserHost.AuthCallback callback) {
         if (!basicAuthEnabled) {

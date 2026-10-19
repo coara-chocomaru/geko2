@@ -1786,8 +1786,25 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             new java.util.HashMap<String, Boolean>());
 
     @Override
-    public void requestStorageAccess(final BrowserView view, String topUrlHint, final String frameOrigin,
-                                     final ValueCallback<Boolean> callback) {
+    public void requestStorageAccess(BrowserView view, String topUrlHint, String frameOrigin,
+                                     ValueCallback<Boolean> callback) {
+        cookieGate(view, topUrlHint, frameOrigin, true, callback);
+    }
+
+    @Override
+    public void onThirdPartyCookieBlocked(BrowserView view, String blockedUri) {
+        if (view != getCurrentWebView() || pendingTabs.containsKey(view)) {
+            return;
+        }
+        cookieGate(view, null, blockedUri, false, new ValueCallback<Boolean>() {
+            @Override
+            public void onReceiveValue(Boolean value) {
+            }
+        });
+    }
+
+    private void cookieGate(final BrowserView view, String topUrlHint, final String frameOrigin,
+                            final boolean storageAccess, final ValueCallback<Boolean> callback) {
         try {
             if (CookieSitePolicy.blockAll(pref)) {
                 callback.onReceiveValue(false);
@@ -1826,7 +1843,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             }
             COOKIE_PROMPTED_SITES.put(topSite, Boolean.TRUE);
             cookiePromptShowing = true;
-            boolean shown = CookiePolicyUi.showPrompt(this, topHost, frameHost, true,
+            boolean shown = CookiePolicyUi.showPrompt(this, topHost, frameHost, storageAccess,
                     new CookiePolicyUi.PromptListener() {
                         @Override
                         public void onAllow() {
@@ -4218,7 +4235,11 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private void updateDarkMode() {
         BrowserEngine.get().setDarkMode(darkModeEnabled);
         applyBrowserVisualSettingsToAllWebViews();
-        reloadTabsForSettings();
+        UiThread.mainHandler().postDelayed(() -> {
+            if (!isFinishing() && !isDestroyed()) {
+                reloadTabsForSettings();
+            }
+        }, 160L);
     }
 
                             private void disablejs() {
