@@ -14,7 +14,7 @@ public final class TabStateStore {
     private TabStateStore() {}
 
     public static void saveBundleToFile(File dir, Bundle bundle, String fileName) {
-        if (dir == null || bundle == null || fileName == null) return;
+        if (dir == null || bundle == null || fileName == null || !PathGuard.isSafeName(fileName)) return;
         File target = new File(dir, fileName);
         File temp = new File(dir, fileName + ".tmp");
         Parcel parcel = Parcel.obtain();
@@ -43,7 +43,7 @@ public final class TabStateStore {
     }
 
     public static Bundle loadBundleFromFile(File dir, String fileName) {
-        if (dir == null || fileName == null) return null;
+        if (dir == null || fileName == null || !PathGuard.isSafeName(fileName)) return null;
         File file = new File(dir, fileName);
         if (!file.exists()) return null;
         try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(file))) {
