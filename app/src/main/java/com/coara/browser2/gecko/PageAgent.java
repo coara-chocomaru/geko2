@@ -24,6 +24,10 @@ public final class PageAgent {
         void onPluginMessage(BrowserView view, WebExtension.Port port, JSONObject message);
     }
 
+    public interface ThirdPartyCookieListener {
+        void onThirdPartyCookie(String topUrl, String requestUrl);
+    }
+
     public interface CookieCallback {
         void onResult(boolean ok, JSONArray list, int count);
     }
@@ -33,6 +37,7 @@ public final class PageAgent {
     private final Map<String, CookieCallback> cookieCallbacks = new HashMap<>();
     private WebExtension.Port backgroundPort;
     private PluginHandler pluginHandler;
+    private volatile ThirdPartyCookieListener thirdPartyListener;
     private JSONArray lastPlugins;
     private final Map<String, String> lastCss = new HashMap<>();
     private JSONObject lastAdBlock;
@@ -43,6 +48,10 @@ public final class PageAgent {
 
     PageAgent(BrowserEngine engine) {
         this.engine = engine;
+    }
+
+    public void setThirdPartyCookieListener(ThirdPartyCookieListener listener) {
+        thirdPartyListener = listener;
     }
 
     public void setPluginHandler(PluginHandler handler) {
@@ -185,6 +194,20 @@ public final class PageAgent {
                     onPluginsSettled(seq);
                 }
             });
+            return;
+        }
+        if ("tp.cookie".equals(t)) {
+            final ThirdPartyCookieListener l = thirdPartyListener;
+            if (l != null) {
+                final String top = m.optString("top");
+                final String url = m.optString("url");
+                engine.mainHandler().post(new Runnable() {
+                    @Override
+                    public void run() {
+                        l.onThirdPartyCookie(top, url);
+                    }
+                });
+            }
             return;
         }
         if ("adblock.count".equals(t)) {

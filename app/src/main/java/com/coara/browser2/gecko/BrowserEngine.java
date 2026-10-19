@@ -107,6 +107,7 @@ public final class BrowserEngine {
                 ? GeckoRuntimeSettings.COLOR_SCHEME_DARK
                 : GeckoRuntimeSettings.COLOR_SCHEME_LIGHT);
         clearLegacyColorSchemePrefs();
+        applyContentColorScheme(darkMode);
         executor = new GeckoWebExecutor(runtime);
         defaultUserAgent = GeckoSession.getDefaultUserAgent();
         installCore();
@@ -220,8 +221,17 @@ public final class BrowserEngine {
         }
     }
 
+    private void applyContentColorScheme(boolean dark) {
+        try {
+            GeckoPreferenceController.setGeckoPref("layout.css.prefers-color-scheme.content-override", dark ? 0 : 1,
+                    GeckoPreferenceController.PREF_BRANCH_USER);
+        } catch (Throwable ignored) {
+        }
+    }
+
     public void setDarkMode(boolean enabled) {
         darkMode = enabled;
+        applyContentColorScheme(enabled);
         if (runtime != null) {
             runtime.getSettings().setPreferredColorScheme(enabled
                     ? GeckoRuntimeSettings.COLOR_SCHEME_DARK

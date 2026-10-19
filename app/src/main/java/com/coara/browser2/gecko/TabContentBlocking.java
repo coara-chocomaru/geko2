@@ -18,7 +18,7 @@ final class TabContentBlocking implements ContentBlocking.Delegate {
     @Override
     public void onContentBlocked(@NonNull GeckoSession session, @NonNull ContentBlocking.BlockEvent event) {
         if (!event.isBlocking()
-                || event.getCookieBehaviorCategory() != ContentBlocking.CookieBehavior.ACCEPT_FIRST_PARTY) {
+                || event.getCookieBehaviorCategory() == ContentBlocking.CookieBehavior.ACCEPT_ALL) {
             return;
         }
         Context c = view.getContext();
