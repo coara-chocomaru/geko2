@@ -4,3 +4,5 @@ HSPLcom/coara/browser2/util/**->**(**)**
 HSPLcom/coara/browser2/webview/**->**(**)**
 HSPLcom/coara/browser2/plugin/PluginManager;->**(**)**
 HSPLcom/coara/browser2/plugin/PluginRuntime;->**(**)**
+HSPLcom/coara/browser2/gecko/**->**(**)**
+HSPLcom/coara/browser2/fx/**->**(**)**
