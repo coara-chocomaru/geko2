@@ -74,6 +74,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.textfield.TextInputEditText;
 import com.coara.browser2.util.SafeBrowsingSupport;
 import com.coara.browser2.util.BasicAuthManager;
+import com.coara.browser2.util.CookieSite;
 import com.coara.browser2.util.CookieSitePolicy;
 import com.coara.browser2.util.ExternalDownloadTabTracker;
 import com.coara.browser2.util.DownloadSupport;
@@ -755,6 +756,32 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             permissionRequestLauncher.launch(permissions);
         } catch (Exception e) {
             pendingPermissionCallback = null;
+            callback.onReceiveValue(false);
+        }
+    }
+
+    @Override
+    public void requestStorageAccess(BrowserView view, String topUrlHint, String frameOrigin,
+                                     ValueCallback<Boolean> callback) {
+        try {
+            if (CookieSitePolicy.blockAll(pref)) {
+                callback.onReceiveValue(false);
+                return;
+            }
+            String live = view.getUrl();
+            String topUrl = live != null && (live.startsWith("http://") || live.startsWith("https://")) ? live : topUrlHint;
+            String topHost = CookieSitePolicy.hostOf(topUrl);
+            String frameHost = CookieSitePolicy.hostOf(frameOrigin);
+            if (topHost.isEmpty() || frameHost.isEmpty()) {
+                callback.onReceiveValue(false);
+                return;
+            }
+            if (CookieSite.siteOf(topHost).equals(CookieSite.siteOf(frameHost))) {
+                callback.onReceiveValue(true);
+                return;
+            }
+            callback.onReceiveValue(CookieSitePolicy.isAllowed(pref, topUrl));
+        } catch (Exception e) {
             callback.onReceiveValue(false);
         }
     }

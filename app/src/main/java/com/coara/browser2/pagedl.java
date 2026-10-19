@@ -881,6 +881,12 @@ public class pagedl extends AppCompatActivity implements BrowserHost {
     }
 
     @Override
+    public void requestStorageAccess(BrowserView view, String topUrlHint, String frameOrigin,
+                                     ValueCallback<Boolean> callback) {
+        callback.onReceiveValue(false);
+    }
+
+    @Override
     public void requestAuth(BrowserView view, String host, String realm, boolean previousFailed, String presetUser,
                             String presetPassword, BrowserHost.AuthCallback callback) {
         if (!basicAuthEnabled) {

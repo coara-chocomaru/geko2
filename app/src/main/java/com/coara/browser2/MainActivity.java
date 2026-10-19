@@ -95,6 +95,7 @@ import com.coara.browser2.util.TabHistoryStore;
 import com.coara.browser2.util.SwipeRefreshPolicy;
 import com.coara.browser2.util.BrowserConstants;
 import com.coara.browser2.util.CookiePolicyUi;
+import com.coara.browser2.util.CookieSite;
 import com.coara.browser2.util.CookieSitePolicy;
 import com.coara.browser2.util.BasicAuthManager;
 import com.coara.browser2.util.ExternalDownloadTabTracker;
@@ -701,6 +702,32 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         return t.toLowerCase(Locale.ROOT);
     }
 
+    private static String canonicalEntryUrl(String u) {
+        if (u != null && u.startsWith("moz-extension://")) {
+            int slash = u.indexOf('/', 16);
+            if (slash > 0) {
+                String path = u.substring(slash);
+                if (path.startsWith("/pages/index.html")) {
+                    return START_PAGE + path.substring("/pages/index.html".length());
+                }
+            }
+        }
+        return u;
+    }
+
+    private static TabHistoryStore.Entry canonicalEntry(TabHistoryStore.Entry e) {
+        String c = canonicalEntryUrl(e.getUrl());
+        return c.equals(e.getUrl()) ? e : new TabHistoryStore.Entry(c, e.getTitle());
+    }
+
+    private static List<TabHistoryStore.Entry> canonicalEntries(List<TabHistoryStore.Entry> in) {
+        ArrayList<TabHistoryStore.Entry> out = new ArrayList<>(in.size());
+        for (TabHistoryStore.Entry e : in) {
+            out.add(canonicalEntry(e));
+        }
+        return out;
+    }
+
     private static boolean sameEntryUrl(String a, String b) {
         return normalizeEntryUrl(a).equals(normalizeEntryUrl(b));
     }
@@ -715,7 +742,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             historyPrefix.remove(view);
             return;
         }
-        List<TabHistoryStore.Entry> all = stored.getEntries();
+        List<TabHistoryStore.Entry> all = canonicalEntries(stored.getEntries());
         int cur = Math.max(0, Math.min(stored.getCurrentIndex(), all.size() - 1));
         historyPrefix.put(view, new ArrayList<>(all.subList(0, cur)));
         restoreSeeds.put(view, new TabHistoryStore.State(all, cur));
@@ -749,7 +776,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             if (u.isEmpty() || u.equals("about:blank")) {
                 continue;
             }
-            geckoEntries.add(new TabHistoryStore.Entry(u, item.getTitle()));
+            geckoEntries.add(new TabHistoryStore.Entry(canonicalEntryUrl(u), item.getTitle()));
             if (i == h.getCurrentIndex()) {
                 geckoCur = geckoEntries.size() - 1;
             }
@@ -794,12 +821,18 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         }
         TabHistoryStore.State prev = getTabHistoryState(view);
         ArrayList<TabHistoryStore.Entry> entries = new ArrayList<>(prefix);
+        while (!entries.isEmpty() && sameEntryUrl(entries.get(entries.size() - 1).getUrl(), geckoEntries.get(0).getUrl())) {
+            entries.remove(entries.size() - 1);
+        }
         int realBase = entries.size();
         entries.addAll(geckoEntries);
         int cur = realBase + geckoCur;
         TabHistoryStore.State next = new TabHistoryStore.State();
         next.replace(entries, cur, MAX_TAB_HISTORY_SIZE);
         int start = Math.max(0, entries.size() - Math.max(1, MAX_TAB_HISTORY_SIZE));
+        if (realBase < prefix.size()) {
+            prefix = new ArrayList<>(prefix.subList(0, realBase));
+        }
         if (start > 0) {
             prefix = new ArrayList<>(prefix.subList(Math.min(start, prefix.size()), prefix.size()));
         }
@@ -1748,6 +1781,103 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             }
         }
     }
+    private boolean cookiePromptShowing;
+    private static final java.util.Map<String, Boolean> COOKIE_PROMPTED_SITES = Collections.synchronizedMap(
+            new java.util.HashMap<String, Boolean>());
+
+    @Override
+    public void requestStorageAccess(final BrowserView view, String topUrlHint, final String frameOrigin,
+                                     final ValueCallback<Boolean> callback) {
+        try {
+            if (CookieSitePolicy.blockAll(pref)) {
+                callback.onReceiveValue(false);
+                return;
+            }
+            String live = view.getUrl();
+            final String topUrl = BrowserUrlRouter.isWebUrl(live) ? live : topUrlHint;
+            if (!BrowserUrlRouter.isWebUrl(topUrl)) {
+                callback.onReceiveValue(false);
+                return;
+            }
+            final String topHost = CookieSitePolicy.hostOf(topUrl);
+            final String frameHost = CookieSitePolicy.hostOf(frameOrigin);
+            if (topHost.isEmpty() || frameHost.isEmpty()) {
+                callback.onReceiveValue(false);
+                return;
+            }
+            final String topSite = CookieSite.siteOf(topHost);
+            if (topSite.equals(CookieSite.siteOf(frameHost))) {
+                callback.onReceiveValue(true);
+                return;
+            }
+            int siteOverride = CookieSitePolicy.override(pref, topUrl);
+            if (siteOverride > 0 || (siteOverride == 0 && CookieSitePolicy.globalAllowed(pref))) {
+                callback.onReceiveValue(true);
+                return;
+            }
+            if (siteOverride < 0) {
+                callback.onReceiveValue(false);
+                return;
+            }
+            if (COOKIE_PROMPTED_SITES.containsKey(topSite) || cookiePromptShowing
+                    || view != getCurrentWebView() || isFinishing() || isDestroyed() || urlEditMode) {
+                callback.onReceiveValue(false);
+                return;
+            }
+            COOKIE_PROMPTED_SITES.put(topSite, Boolean.TRUE);
+            cookiePromptShowing = true;
+            boolean shown = CookiePolicyUi.showPrompt(this, topHost, frameHost, true,
+                    new CookiePolicyUi.PromptListener() {
+                        @Override
+                        public void onAllow() {
+                            if (CookieSitePolicy.setOverride(pref, topUrl, 1)) {
+                                refreshThirdPartyCookiePolicy();
+                                callback.onReceiveValue(true);
+                                reloadIfSameSite(view, topSite);
+                            } else {
+                                Toast.makeText(MainActivity.this, "Cookie設定を保存できませんでした", Toast.LENGTH_SHORT).show();
+                                callback.onReceiveValue(false);
+                            }
+                        }
+
+                        @Override
+                        public void onBlockAlways() {
+                            if (CookieSitePolicy.setOverride(pref, topUrl, -1)) {
+                                refreshThirdPartyCookiePolicy();
+                                reloadIfSameSite(view, topSite);
+                            } else {
+                                Toast.makeText(MainActivity.this, "Cookie設定を保存できませんでした", Toast.LENGTH_SHORT).show();
+                            }
+                            callback.onReceiveValue(false);
+                        }
+
+                        @Override
+                        public void onDeny() {
+                            callback.onReceiveValue(false);
+                        }
+
+                        @Override
+                        public void onClosed() {
+                            cookiePromptShowing = false;
+                        }
+                    });
+            if (!shown) {
+                cookiePromptShowing = false;
+                callback.onReceiveValue(false);
+            }
+        } catch (Exception e) {
+            cookiePromptShowing = false;
+            callback.onReceiveValue(false);
+        }
+    }
+
+    private void reloadIfSameSite(BrowserView view, String topSite) {
+        if (view == getCurrentWebView()
+                && topSite.equals(CookieSite.siteOf(CookieSitePolicy.hostOf(view.getUrl())))) {
+            view.reload();
+        }
+    }
+
     private int cookiePolicyStamp = Integer.MIN_VALUE;
 
     private void applyCookieBehaviorFor(String url) {
@@ -2110,8 +2240,36 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private final com.coara.browser2.fx.FxExtensionManager.TabHost fxTabHost = new com.coara.browser2.fx.FxExtensionManager.TabHost() {
         @Override
         public org.mozilla.geckoview.GeckoSession openExtensionTab(boolean active) {
-            BrowserView child = openPopupTab();
+            BrowserView child = openPopupTab(active);
             return child == null ? null : child.createChildSession();
+        }
+
+        @Override
+        public boolean closeExtensionSession(org.mozilla.geckoview.GeckoSession session) {
+            BrowserView target = findViewBySession(session);
+            if (target == null || webViews.size() <= 1) {
+                return false;
+            }
+            UiThread.mainHandler().post(() -> {
+                if (webViews.contains(target)) {
+                    closeTab(target);
+                }
+            });
+            return true;
+        }
+
+        @Override
+        public void activateSession(org.mozilla.geckoview.GeckoSession session) {
+            BrowserView target = findViewBySession(session);
+            if (target == null) {
+                return;
+            }
+            UiThread.mainHandler().post(() -> {
+                int idx = webViews.indexOf(target);
+                if (idx >= 0) {
+                    switchToTab(idx);
+                }
+            });
         }
 
         @Override
@@ -2120,7 +2278,23 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         }
     };
 
+    private BrowserView findViewBySession(org.mozilla.geckoview.GeckoSession session) {
+        if (session == null) {
+            return null;
+        }
+        for (BrowserView v : new ArrayList<>(webViews)) {
+            if (v.getGeckoSession() == session) {
+                return v;
+            }
+        }
+        return null;
+    }
+
     private BrowserView openPopupTab() {
+        return openPopupTab(true);
+    }
+
+    private BrowserView openPopupTab(boolean activate) {
         if (webViews.size() >= MAX_TABS) {
             Toast.makeText(this, "最大タブ数に達しました", Toast.LENGTH_SHORT).show();
             return null;
@@ -2132,7 +2306,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         popupTabs.add(child);
         tabHistoryStates.put(child, new TabHistoryStore.State());
         updateTabCount();
-        switchToTab(webViews.size() - 1);
+        if (activate) {
+            switchToTab(webViews.size() - 1);
+        }
         return child;
     }
 
@@ -3679,9 +3855,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         } else if (id == R.id.action_clear_cache) {
             showClearCacheDialog();
             return true;
-        } else if (id == R.id.action_clear_form_history) {
-            showClearFormHistoryDialog();
-            return true;
         } else if (id == R.id.action_clear_history) {
             clearAllBrowsingData();
             urlEditText.setInputType(EditorInfo.TYPE_CLASS_TEXT | EditorInfo.TYPE_TEXT_VARIATION_URI | EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
@@ -3692,7 +3865,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             String currentText = urlEditText.getText().toString();
             urlEditText.setText("");
             urlEditText.setText(currentText);
-            Toast.makeText(MainActivity.this, "履歴、フォームデータ、検索候補、及びタブとCookieを消去しました", Toast.LENGTH_SHORT).show();
+            Toast.makeText(MainActivity.this, "履歴、検索候補、及びタブとCookieを消去しました", Toast.LENGTH_SHORT).show();
         } else if (id == R.id.action_negapoji) {
             applyNegapoji();
         } else if (id == R.id.action_translate) {
@@ -3804,18 +3977,53 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         }
     }
 
+    private interface StorageClearTask {
+        org.mozilla.geckoview.GeckoResult<Void> run();
+    }
+
+    private void runStorageClear(final String label, final StorageClearTask task) {
+        final boolean[] finished = {false};
+        final Runnable timeout = () -> {
+            if (!finished[0]) {
+                finished[0] = true;
+                Toast.makeText(MainActivity.this, label + "の消去を実行しました", Toast.LENGTH_SHORT).show();
+            }
+        };
+        UiThread.mainHandler().postDelayed(timeout, 4000L);
+        try {
+            org.mozilla.geckoview.GeckoResult<Void> result = task.run();
+            if (result == null) {
+                UiThread.mainHandler().removeCallbacks(timeout);
+                finished[0] = true;
+                Toast.makeText(MainActivity.this, label + "を消去できませんでした", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            result.accept(value -> UiThread.mainHandler().post(() -> {
+                if (!finished[0]) {
+                    finished[0] = true;
+                    UiThread.mainHandler().removeCallbacks(timeout);
+                    Toast.makeText(MainActivity.this, label + "を消去しました", Toast.LENGTH_SHORT).show();
+                }
+            }), error -> UiThread.mainHandler().post(() -> {
+                if (!finished[0]) {
+                    finished[0] = true;
+                    UiThread.mainHandler().removeCallbacks(timeout);
+                    Toast.makeText(MainActivity.this, label + "を消去できませんでした", Toast.LENGTH_SHORT).show();
+                }
+            }));
+        } catch (Throwable t) {
+            UiThread.mainHandler().removeCallbacks(timeout);
+            finished[0] = true;
+            Toast.makeText(MainActivity.this, label + "を消去できませんでした", Toast.LENGTH_SHORT).show();
+        }
+    }
+
     private void showClearCookiesDialog() {
         new AlertDialog.Builder(MainActivity.this)
                 .setTitle("クッキーを消去")
                 .setMessage("一時クッキーを全て消しますか？")
                 .setNegativeButton("はい", (dialog, which) -> {
-                    try {
-                        BrowserEngine.get().clearCookies().accept(
-                                value -> Toast.makeText(MainActivity.this, "クッキーを消去しました", Toast.LENGTH_SHORT).show(),
-                                error -> Toast.makeText(MainActivity.this, "クッキーを消去できませんでした", Toast.LENGTH_SHORT).show());
-                    } catch (Exception e) {
-                        Toast.makeText(MainActivity.this, "クッキーを消去できませんでした", Toast.LENGTH_SHORT).show();
-                    }
+                    runStorageClear("クッキー", () -> BrowserEngine.get().clearCookies());
                 })
                 .setPositiveButton("いいえ", null)
                 .show();
@@ -3826,34 +4034,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 .setTitle("キャッシュを消去")
                 .setMessage("一時キャッシュを全て消しますか？")
                 .setNegativeButton("はい", (dialog, which) -> {
-                    try {
-                        BrowserEngine.get().clearCaches().accept(
-                                value -> Toast.makeText(MainActivity.this, "キャッシュを消去しました", Toast.LENGTH_SHORT).show(),
-                                error -> Toast.makeText(MainActivity.this, "キャッシュを消去できませんでした", Toast.LENGTH_SHORT).show());
-                    } catch (Exception e) {
-                        Toast.makeText(MainActivity.this, "キャッシュを消去できませんでした", Toast.LENGTH_SHORT).show();
-                    }
-                })
-                .setPositiveButton("いいえ", null)
-                .show();
-    }
-
-    private void showClearFormHistoryDialog() {
-        new AlertDialog.Builder(MainActivity.this)
-                .setTitle("フォーム履歴を消去")
-                .setMessage("フォームの入力履歴を全て消しますか？")
-                .setNegativeButton("はい", (dialog, which) -> {
-                    ArrayList<BrowserView> all;
-                    synchronized (webViews) {
-                        all = new ArrayList<>(webViews);
-                    }
-                    for (BrowserView view : all) {
-                        try {
-                            view.clearFormData();
-                        } catch (Exception ignored) {
-                        }
-                    }
-                    Toast.makeText(MainActivity.this, "フォーム履歴を消去しました", Toast.LENGTH_SHORT).show();
+                    runStorageClear("キャッシュ", () -> BrowserEngine.get().clearCaches());
                 })
                 .setPositiveButton("いいえ", null)
                 .show();
@@ -3923,7 +4104,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         urlEditText.setAutofillHints("");
         urlEditText.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
         urlEditText.setText("");
-        Toast.makeText(MainActivity.this, "履歴、フォームデータ、検索候補、及びタブとCookieを消去しました", Toast.LENGTH_SHORT).show();
+        Toast.makeText(MainActivity.this, "履歴、検索候補、及びタブとCookieを消去しました", Toast.LENGTH_SHORT).show();
     }
 
     private void purgeTabFiles() {
