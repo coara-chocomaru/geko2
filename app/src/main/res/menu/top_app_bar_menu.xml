@@ -90,7 +90,6 @@
             <item android:id="@+id/action_pin_settings" android:title="起動保護" />
             <item android:id="@+id/action_clear_cookies" android:title="クッキーを消去" />
             <item android:id="@+id/action_clear_cache" android:title="キャッシュを消去" />
-            <item android:id="@+id/action_clear_form_history" android:title="フォーム履歴を消去" />
             <item android:id="@+id/action_clear_history" android:title="完全履歴消去" />
         </menu>
     </item>
