@@ -229,6 +229,66 @@
         }
     }
 
+    var tpSeen = Object.create(null);
+    var tpCount = 0;
+
+    function topOf(details) {
+        var a = details.frameAncestors;
+        if (a && a.length) {
+            return String(a[a.length - 1].url || "");
+        }
+        return String(details.documentUrl || details.originUrl || "");
+    }
+
+    function hostOf(u) {
+        try {
+            return new URL(u).hostname;
+        } catch (e) {
+            return "";
+        }
+    }
+
+    function hasSetCookie(headers) {
+        if (!headers) {
+            return false;
+        }
+        for (var i = 0; i < headers.length; i++) {
+            if (String(headers[i].name).toLowerCase() === "set-cookie") {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    try {
+        browser.webRequest.onHeadersReceived.addListener(function (details) {
+            try {
+                if (!details.thirdParty || details.tabId < 0 || !hasSetCookie(details.responseHeaders)) {
+                    return;
+                }
+                var top = topOf(details);
+                var topHost = hostOf(top);
+                var host = hostOf(details.url);
+                if (!topHost || !host || topHost === host) {
+                    return;
+                }
+                var key = topHost + ">" + host;
+                if (tpSeen[key]) {
+                    return;
+                }
+                if (tpCount >= 1024) {
+                    tpSeen = Object.create(null);
+                    tpCount = 0;
+                }
+                tpSeen[key] = 1;
+                tpCount++;
+                send({ t: "tp.cookie", top: top, url: details.url });
+            } catch (e) {
+            }
+        }, { urls: ["http://*/*", "https://*/*"] }, ["responseHeaders"]);
+    } catch (e) {
+    }
+
     CoaraAdBlock.setCountListener(function (n) {
         send({ t: "adblock.count", n: n });
     });
