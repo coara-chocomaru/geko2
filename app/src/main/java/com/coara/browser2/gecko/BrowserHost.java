@@ -18,6 +18,8 @@ public interface BrowserHost {
 
     void requestStorageAccess(BrowserView view, String topUrl, String frameOrigin, ValueCallback<Boolean> callback);
 
+    void onThirdPartyCookieBlocked(BrowserView view, String blockedUri);
+
     void requestAuth(BrowserView view, String host, String realm, boolean previousFailed, String presetUser,
                      String presetPassword, AuthCallback callback);
 }

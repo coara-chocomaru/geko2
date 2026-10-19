@@ -216,6 +216,7 @@ public class BrowserView extends GeckoView {
         s.setScrollDelegate(scrollDelegate);
         s.setPromptDelegate(new TabPrompts(this));
         s.setPermissionDelegate(new TabPermissions(this));
+        s.setContentBlockingDelegate(new TabContentBlocking(this));
     }
 
     private void ensureSession() {

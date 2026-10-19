@@ -284,6 +284,7 @@ public final class BrowserEngine {
     public void setCookieBehavior(int behavior) {
         if (runtime != null) {
             runtime.getSettings().getContentBlocking().setCookieBehavior(behavior);
+            runtime.getSettings().getContentBlocking().setCookieBehaviorPrivateMode(behavior);
         }
     }
 

@@ -47,7 +47,7 @@ public final class LocalPages {
     public static String toActual(String logicalUrl) {
         String base = BrowserEngine.get().getExtensionBaseUrl();
         String name = pageName(logicalUrl);
-        if (base == null || name == null || name.isEmpty()) {
+        if (base == null || name == null || name.isEmpty() || !com.coara.browser2.util.PathGuard.isSafeRelativePath(name)) {
             return null;
         }
         return base + BrowserEngine.PAGES_DIR + name + suffix(logicalUrl);
