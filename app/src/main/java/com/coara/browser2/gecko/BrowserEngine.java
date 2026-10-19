@@ -41,6 +41,9 @@ public final class BrowserEngine {
     private GeckoWebExecutor executor;
     private WebExtension core;
     private String extensionBaseUrl;
+    private volatile String persistedBaseUrl;
+    private volatile String legacyBaseUrl;
+    private static final String KEY_CORE_BASE = "core_ext_base_url";
     private String defaultUserAgent;
     private boolean darkMode;
     private boolean imagesEnabled = true;
@@ -76,6 +79,7 @@ public final class BrowserEngine {
     private void start() {
         SharedPreferences prefs = appContext.getSharedPreferences(BrowserConstants.PREF_NAME, Context.MODE_PRIVATE);
         darkMode = prefs.getBoolean(BrowserConstants.KEY_DARK_MODE, false);
+        persistedBaseUrl = prefs.getString(KEY_CORE_BASE, null);
         ContentBlocking.Settings blocking = new ContentBlocking.Settings.Builder()
                 .antiTracking(ContentBlocking.AntiTracking.DEFAULT)
                 .safeBrowsing(ContentBlocking.SafeBrowsing.DEFAULT)
@@ -130,6 +134,15 @@ public final class BrowserEngine {
         core = extension;
         try {
             extensionBaseUrl = extension.metaData.baseUrl;
+            if (extensionBaseUrl != null && !extensionBaseUrl.equals(persistedBaseUrl)) {
+                final String previous = persistedBaseUrl;
+                persistedBaseUrl = extensionBaseUrl;
+                appContext.getSharedPreferences(BrowserConstants.PREF_NAME, Context.MODE_PRIVATE).edit()
+                        .putString(KEY_CORE_BASE, extensionBaseUrl).apply();
+                if (previous != null) {
+                    legacyBaseUrl = previous;
+                }
+            }
         } catch (Throwable ignored) {
             extensionBaseUrl = null;
         }
@@ -180,6 +193,15 @@ public final class BrowserEngine {
 
     public String getExtensionBaseUrl() {
         return extensionBaseUrl;
+    }
+
+    public String getKnownExtensionBaseUrl() {
+        String live = extensionBaseUrl;
+        return live != null ? live : persistedBaseUrl;
+    }
+
+    public String getLegacyExtensionBaseUrl() {
+        return legacyBaseUrl;
     }
 
     public boolean isAgentReady() {
@@ -274,7 +296,7 @@ public final class BrowserEngine {
     }
 
     public GeckoResult<Void> clearCookies() {
-        return runtime.getStorageController().clearData(StorageController.ClearFlags.COOKIES);
+        return runtime.getStorageController().clearData(StorageController.ClearFlags.COOKIES | StorageController.ClearFlags.DOM_STORAGES | StorageController.ClearFlags.AUTH_SESSIONS);
     }
 
     public GeckoResult<Void> clearCaches() {

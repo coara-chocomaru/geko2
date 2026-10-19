@@ -150,6 +150,37 @@ public class BrowserView extends GeckoView {
         return session;
     }
 
+    public void refreshSurface() {
+        if (destroyed || session == null) {
+            return;
+        }
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                if (destroyed || session == null) {
+                    return;
+                }
+                try {
+                    session.getCompositorController().setClearColor(clearColor);
+                } catch (Throwable ignored) {
+                }
+                requestLayout();
+                invalidate();
+                if (getVisibility() == View.VISIBLE && isAttachedToWindow()) {
+                    setVisibility(View.INVISIBLE);
+                    main.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (!destroyed && getVisibility() == View.INVISIBLE) {
+                                setVisibility(View.VISIBLE);
+                            }
+                        }
+                    }, 32L);
+                }
+            }
+        });
+    }
+
     public boolean hasSession() {
         return session != null;
     }

@@ -61,8 +61,12 @@ public final class LocalPages {
         if (failed != null) {
             return failed;
         }
-        String base = BrowserEngine.get().getExtensionBaseUrl();
-        if (base != null) {
+        BrowserEngine engine = BrowserEngine.get();
+        String[] bases = {engine.getKnownExtensionBaseUrl(), engine.getLegacyExtensionBaseUrl()};
+        for (String base : bases) {
+            if (base == null) {
+                continue;
+            }
             String prefix = base + BrowserEngine.PAGES_DIR;
             if (actualUrl.startsWith(prefix)) {
                 return BrowserConstants.APP_ASSET_BASE_URL + actualUrl.substring(prefix.length());

@@ -38,10 +38,28 @@ final class TabPermissions implements GeckoSession.PermissionDelegate {
     @Override
     public GeckoResult<Integer> onContentPermissionRequest(GeckoSession session, ContentPermission perm) {
         int value;
+        if (perm.permission == PERMISSION_STORAGE_ACCESS) {
+            final GeckoResult<Integer> result = new GeckoResult<>();
+            BrowserHost h = host();
+            if (h == null) {
+                return GeckoResult.fromValue(ContentPermission.VALUE_DENY);
+            }
+            try {
+                h.requestStorageAccess(view, perm.uri, perm.thirdPartyOrigin, new ValueCallback<Boolean>() {
+                    @Override
+                    public void onReceiveValue(Boolean allowed) {
+                        result.complete(Boolean.TRUE.equals(allowed) ? ContentPermission.VALUE_ALLOW
+                                : ContentPermission.VALUE_DENY);
+                    }
+                });
+            } catch (Throwable t) {
+                result.complete(ContentPermission.VALUE_DENY);
+            }
+            return result;
+        }
         switch (perm.permission) {
             case PERMISSION_PERSISTENT_STORAGE:
             case PERMISSION_MEDIA_KEY_SYSTEM_ACCESS:
-            case PERMISSION_STORAGE_ACCESS:
             case PERMISSION_AUTOPLAY_INAUDIBLE:
                 value = ContentPermission.VALUE_ALLOW;
                 break;

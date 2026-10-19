@@ -16,6 +16,8 @@ public interface BrowserHost {
 
     void requestAndroidPermissions(String[] permissions, ValueCallback<Boolean> callback);
 
+    void requestStorageAccess(BrowserView view, String topUrl, String frameOrigin, ValueCallback<Boolean> callback);
+
     void requestAuth(BrowserView view, String host, String realm, boolean previousFailed, String presetUser,
                      String presetPassword, AuthCallback callback);
 }
