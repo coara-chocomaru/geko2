@@ -65,6 +65,14 @@ public class BrowserView extends GeckoView {
         void onFindResult(int activeIndex, int total);
     }
 
+    public interface FindMapCallback {
+        void onFindMap(float[] fractions, boolean capped);
+    }
+
+    public interface FractionCallback {
+        void onFraction(float fraction);
+    }
+
     private static final class PendingEval {
         final String code;
         final ValueCallback<String> callback;
@@ -83,6 +91,7 @@ public class BrowserView extends GeckoView {
         final FindCallback callback;
         long startedAt;
         boolean retried;
+        int index;
 
         FindRequest(int type, String query, int flags, int generation, FindCallback callback) {
             this.type = type;
@@ -739,6 +748,7 @@ public class BrowserView extends GeckoView {
     private static final int FIND_REQUEST_STEP = 2;
     private static final int FIND_REQUEST_CLEAR = 3;
     private static final int FIND_REQUEST_FAST_STEP = 4;
+    private static final int FIND_REQUEST_JUMP = 5;
     private static final long FIND_CLEAR_DELAY_MS = 180L;
     private static final long FIND_CLEAR_SETTLE_MS = 80L;
     private static final int MAX_PENDING_FIND_STEPS = 12;
@@ -756,6 +766,9 @@ public class BrowserView extends GeckoView {
     private int lastFindIndex = -1;
     private int lastFindTotal = -1;
     private String lastFindResultQuery;
+    private FindMapCallback findMapCallback;
+    private int findMapGen = -1;
+    private int findMapCount;
 
     public long lastFindMillis() {
         return findLastMs;
@@ -858,6 +871,8 @@ public class BrowserView extends GeckoView {
             }
         } else if (request.type == FIND_REQUEST_FAST_STEP) {
             runFastFindStep(request);
+        } else if (request.type == FIND_REQUEST_JUMP) {
+            runFindJump(request);
         } else {
             runNativeFind(request, null, false);
         }
@@ -992,6 +1007,153 @@ public class BrowserView extends GeckoView {
         });
     }
 
+    private void runFindJump(final FindRequest request) {
+        final GeckoSession target = session;
+        if (target == null || destroyed || findMapGen != findToken || findMapGen != request.generation
+                || findQuery == null) {
+            finishFindJump(request, false);
+            return;
+        }
+        final String script = "(function(){try{var f=window.__coaraFind;return !!f&&f.jump(" + findMapGen + ","
+                + request.index + ")}catch(e){return false}})()";
+        evaluateJavascript(script, new ValueCallback<String>() {
+            @Override
+            public void onReceiveValue(final String value) {
+                main.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        finishFindJump(request, target == session && !destroyed
+                                && request.generation == findToken && "true".equalsIgnoreCase(value));
+                    }
+                });
+            }
+        });
+    }
+
+    private void finishFindJump(FindRequest request, boolean success) {
+        if (!findInFlight) {
+            return;
+        }
+        findInFlight = false;
+        if (success && request.callback != null && findQuery != null) {
+            int mapCount = Math.max(1, findMapCount);
+            int total = lastFindTotal > 0 ? lastFindTotal : mapCount;
+            int mapped = request.index;
+            if (total != mapCount && mapCount > 1) {
+                mapped = Math.round(request.index * (total - 1f) / (mapCount - 1f));
+            }
+            mapped = Math.max(0, Math.min(total - 1, mapped));
+            lastFindIndex = mapped;
+            lastFindTotal = total;
+            lastFindResultQuery = findQuery;
+            request.callback.onFindResult(mapped, total);
+        }
+        scheduleFindPump(0L);
+    }
+
+    public void requestFindMap(final String query, final FindMapCallback callback) {
+        if (query == null || query.isEmpty() || destroyed || session == null || !query.equals(findQuery)) {
+            return;
+        }
+        findMapGen = findToken;
+        findMapCallback = callback;
+        findMapCount = 0;
+        evaluateJavascript("(function(){try{var f=window.__coaraFind;return !!f&&f.start(" + findMapGen + ","
+                + JSONObject.quote(query) + ")}catch(e){return false}})()", null);
+    }
+
+    public void cancelFindMap() {
+        findMapCallback = null;
+        findMapGen = -1;
+        findMapCount = 0;
+        if (topPort != null) {
+            evaluateJavascript("(function(){try{var f=window.__coaraFind;if(f)f.stop();return true}catch(e){return false}})()", null);
+        }
+    }
+
+    public boolean jumpToMatch(int index, FindCallback callback) {
+        if (session == null || destroyed || findQuery == null || findMapGen != findToken
+                || index < 0 || index >= findMapCount) {
+            return false;
+        }
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            final int i = index;
+            final FindCallback cb = callback;
+            main.post(new Runnable() {
+                @Override
+                public void run() {
+                    jumpToMatch(i, cb);
+                }
+            });
+            return true;
+        }
+        FindRequest request = new FindRequest(FIND_REQUEST_JUMP, findQuery,
+                GeckoSession.FINDER_FIND_FORWARD, findToken, callback);
+        request.index = index;
+        java.util.Iterator<FindRequest> iterator = pendingFindRequests.iterator();
+        while (iterator.hasNext()) {
+            FindRequest queued = iterator.next();
+            if (queued.type == FIND_REQUEST_JUMP && queued.generation == findToken) {
+                iterator.remove();
+            }
+        }
+        pendingFindRequests.addLast(request);
+        pumpFindRequests();
+        return true;
+    }
+
+    public void queryActiveFraction(final FractionCallback callback) {
+        if (callback == null) {
+            return;
+        }
+        if (topPort == null || destroyed) {
+            callback.onFraction(-1f);
+            return;
+        }
+        evaluateJavascript("(function(){try{var f=window.__coaraFind;return f?f.activeY():-1}catch(e){return -1}})()",
+                new ValueCallback<String>() {
+                    @Override
+                    public void onReceiveValue(final String value) {
+                        float parsed = -1f;
+                        try {
+                            parsed = Float.parseFloat(value);
+                        } catch (Exception ignored) {
+                        }
+                        final float result = parsed;
+                        main.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                callback.onFraction(result);
+                            }
+                        });
+                    }
+                });
+    }
+
+    private void onFindMapMessage(JSONObject m) {
+        final FindMapCallback cb = findMapCallback;
+        if (cb == null || m.optInt("gen", -2) != findMapGen || findMapGen != findToken
+                || findQuery == null || !findQuery.equals(m.optString("q"))) {
+            return;
+        }
+        JSONArray arr = m.optJSONArray("f");
+        int n = arr == null ? 0 : arr.length();
+        final float[] fractions = new float[n];
+        for (int i = 0; i < n; i++) {
+            fractions[i] = (float) arr.optDouble(i, 0d);
+        }
+        findMapCount = n;
+        final boolean capped = m.optBoolean("capped", false);
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                if (findMapCallback == cb) {
+                    cb.onFindMap(fractions, capped);
+                }
+            }
+        });
+    }
+
     private void finishFastFindRequest(FindRequest request) {
         if (!findInFlight) {
             return;
@@ -1059,6 +1221,7 @@ public class BrowserView extends GeckoView {
         }
         cancelDeferredFindClear();
         final int generation = ++findToken;
+        cancelFindMap();
         pendingFindRequests.clear();
         findQuery = query;
         lastFindIndex = -1;
@@ -1127,6 +1290,7 @@ public class BrowserView extends GeckoView {
 
     public void clearMatches() {
         final int generation = ++findToken;
+        cancelFindMap();
         findQuery = null;
         findLastMs = 0L;
         pendingFindRequests.clear();
@@ -1273,6 +1437,8 @@ public class BrowserView extends GeckoView {
             if (cb != null) {
                 cb.onReceiveValue(m.optString("v", "null"));
             }
+        } else if ("fmap".equals(t) && top) {
+            onFindMapMessage(m);
         } else if ("call".equals(t)) {
             BridgeListener l = bridgeListener;
             if (l != null) {
