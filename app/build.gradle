@@ -14,8 +14,8 @@ android {
         applicationId = 'com.coara.browser2'
         minSdk = 26
         targetSdk = 31
-        versionCode = 9
-        versionName = "1.1.0"
+        versionCode = 24
+        versionName = "1.1.1"
         multiDexEnabled = true
         vectorDrawables.useSupportLibrary = true
         if (project.hasProperty('bundleBuild')) {
