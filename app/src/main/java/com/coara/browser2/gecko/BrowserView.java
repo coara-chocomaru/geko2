@@ -738,8 +738,9 @@ public class BrowserView extends GeckoView {
     private static final int FIND_REQUEST_QUERY = 1;
     private static final int FIND_REQUEST_STEP = 2;
     private static final int FIND_REQUEST_CLEAR = 3;
-    private static final long FIND_CLEAR_DELAY_MS = 220L;
-    private static final long FIND_CLEAR_SETTLE_MS = 180L;
+    private static final int FIND_REQUEST_FAST_STEP = 4;
+    private static final long FIND_CLEAR_DELAY_MS = 180L;
+    private static final long FIND_CLEAR_SETTLE_MS = 80L;
     private static final int MAX_PENDING_FIND_STEPS = 12;
     private static final String FIND_DECOY = "\uFFFF\uFFFE";
 
@@ -855,6 +856,8 @@ public class BrowserView extends GeckoView {
             } else {
                 runNativeFind(request, nativeQuery, false);
             }
+        } else if (request.type == FIND_REQUEST_FAST_STEP) {
+            runFastFindStep(request);
         } else {
             runNativeFind(request, null, false);
         }
@@ -945,24 +948,92 @@ public class BrowserView extends GeckoView {
         }
     }
 
+    private void runFastFindStep(final FindRequest request) {
+        final GeckoSession target = session;
+        if (target == null || destroyed || topPort == null || request.query == null
+                || !request.query.equals(findQuery) || !request.query.equals(lastFindResultQuery)
+                || lastFindIndex < 0 || lastFindTotal <= 0) {
+            runNativeFind(request, null, false);
+            return;
+        }
+        final boolean backwards = request.flags == GeckoSession.FINDER_FIND_BACKWARDS;
+        final int currentIndex = lastFindIndex;
+        final int total = lastFindTotal;
+        final int generation = request.generation;
+        final String script = "(function(){try{var q=" + JSONObject.quote(request.query)
+                + ",g=" + generation + ",t=" + total + ",i=" + currentIndex
+                + ",b=" + backwards
+                + ",w=window,s=w.getSelection&&w.getSelection(),st=w.__coaraGeckoFindFastState;"
+                + "if(typeof w.find!==\"function\")return false;"
+                + "if(st&&st.g===g&&st.q===q&&st.t===t&&st.i===i){if(!w.find(q,false,b,true,false,true,false))return false;st.i=(st.i+(b?-1:1)+t)%t;return true;}"
+                + "var target=(i+(b?-1:1)+t)%t,selected=s&&s.rangeCount>0&&String(s).toLocaleLowerCase()===q.toLocaleLowerCase();"
+                + "if(selected){if(!w.find(q,false,b,true,false,true,false))return false;w.__coaraGeckoFindFastState={g:g,q:q,t:t,i:target};return true;}"
+                + "if(s&&s.removeAllRanges)s.removeAllRanges();"
+                + "var f=target+1,r=t-target,ab=r<f,n=ab?r:f;"
+                + "for(var j=0;j<n;j++){if(!w.find(q,false,ab,true,false,true,false))return false;}"
+                + "w.__coaraGeckoFindFastState={g:g,q:q,t:t,i:target};return true;"
+                + "}catch(e){return false}})()";
+        evaluateJavascript(script, new ValueCallback<String>() {
+            @Override
+            public void onReceiveValue(final String value) {
+                main.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (target != session || destroyed || request.generation != findToken) {
+                            finishFindRequest(request, null, true);
+                        } else if ("true".equalsIgnoreCase(value)) {
+                            finishFastFindRequest(request);
+                        } else {
+                            runNativeFind(request, null, false);
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    private void finishFastFindRequest(FindRequest request) {
+        if (!findInFlight) {
+            return;
+        }
+        findInFlight = false;
+        findLastMs = Math.max(0L, SystemClock.uptimeMillis() - request.startedAt);
+        if (request.generation == findToken && !destroyed && request.callback != null
+                && lastFindTotal > 0 && lastFindIndex >= 0 && request.query != null
+                && request.query.equals(findQuery)) {
+            if (request.flags == GeckoSession.FINDER_FIND_BACKWARDS) {
+                lastFindIndex = (lastFindIndex + lastFindTotal - 1) % lastFindTotal;
+            } else {
+                lastFindIndex = (lastFindIndex + 1) % lastFindTotal;
+            }
+            lastFindResultQuery = findQuery;
+            request.callback.onFindResult(lastFindIndex, lastFindTotal);
+        } else if (request.generation == findToken && request.callback != null) {
+            request.callback.onFindResult(0, 0);
+        }
+        scheduleFindPump(0L);
+    }
+
     private void finishFindRequest(FindRequest request, GeckoSession.FinderResult value, boolean failed) {
         if (!findInFlight) {
             return;
         }
         findInFlight = false;
-        if (request.type == FIND_REQUEST_QUERY || request.type == FIND_REQUEST_STEP) {
+        if (request.type == FIND_REQUEST_QUERY || request.type == FIND_REQUEST_STEP || request.type == FIND_REQUEST_FAST_STEP) {
             findLastMs = Math.max(0L, SystemClock.uptimeMillis() - request.startedAt);
         }
         if (request.generation == findToken && !destroyed && request.callback != null) {
             if (failed || value == null) {
                 request.callback.onFindResult(0, 0);
             } else if (value.found && value.current > 0) {
-                int total = value.total > 0 ? value.total : -1;
+                int total = value.total > 0 ? value.total
+                        : lastFindResultQuery != null && lastFindResultQuery.equals(findQuery) && lastFindTotal > 0
+                        ? lastFindTotal : -1;
                 lastFindIndex = value.current - 1;
                 lastFindTotal = total;
                 lastFindResultQuery = findQuery;
                 request.callback.onFindResult(lastFindIndex, total);
-            } else if (value.found && request.type == FIND_REQUEST_STEP
+            } else if ((request.type == FIND_REQUEST_STEP || request.type == FIND_REQUEST_FAST_STEP)
                     && lastFindResultQuery != null && lastFindResultQuery.equals(findQuery)
                     && lastFindIndex >= 0) {
                 request.callback.onFindResult(lastFindIndex, lastFindTotal);
@@ -1011,6 +1082,17 @@ public class BrowserView extends GeckoView {
     }
 
     public boolean findNext(final boolean forward, final FindCallback callback) {
+        return enqueueFindStep(null, forward, false, callback);
+    }
+
+    public boolean findNextFast(final String query, final boolean forward, final FindCallback callback) {
+        if (query == null || !query.equals(findQuery)) {
+            return false;
+        }
+        return enqueueFindStep(query, forward, true, callback);
+    }
+
+    private boolean enqueueFindStep(final String query, final boolean forward, final boolean preferFast, final FindCallback callback) {
         if (session == null || destroyed || findQuery == null) {
             return false;
         }
@@ -1018,19 +1100,21 @@ public class BrowserView extends GeckoView {
             main.post(new Runnable() {
                 @Override
                 public void run() {
-                    findNext(forward, callback);
+                    enqueueFindStep(query, forward, preferFast, callback);
                 }
             });
             return true;
         }
-        FindRequest request = new FindRequest(FIND_REQUEST_STEP, null,
+        FindRequest request = new FindRequest(preferFast ? FIND_REQUEST_FAST_STEP : FIND_REQUEST_STEP,
+                preferFast ? query : null,
                 forward ? GeckoSession.FINDER_FIND_FORWARD : GeckoSession.FINDER_FIND_BACKWARDS,
                 findToken, callback);
         if (pendingFindRequests.size() >= MAX_PENDING_FIND_STEPS) {
             java.util.Iterator<FindRequest> iterator = pendingFindRequests.iterator();
             while (iterator.hasNext()) {
                 FindRequest queued = iterator.next();
-                if (queued.type == FIND_REQUEST_STEP && queued.generation == findToken) {
+                if ((queued.type == FIND_REQUEST_STEP || queued.type == FIND_REQUEST_FAST_STEP)
+                        && queued.generation == findToken) {
                     iterator.remove();
                     break;
                 }
