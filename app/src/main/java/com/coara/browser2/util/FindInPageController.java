@@ -180,7 +180,9 @@ public final class FindInPageController {
             @Override
             public void afterTextChanged(Editable s) {
                 if (!suppressWatcher) {
-                    scheduleSearch(DEBOUNCE_MS);
+                    BrowserView cur = provider.current();
+                long adaptive = cur == null ? DEBOUNCE_MS : Math.max(DEBOUNCE_MS, Math.min(700L, cur.lastFindMillis()));
+                scheduleSearch(adaptive);
                 }
             }
         });
@@ -239,13 +241,13 @@ public final class FindInPageController {
         if (w == null || q.isEmpty()) {
             return;
         }
-        if (!hasMatch || !q.equals(lastQuery)) {
+        if (!hasMatch || !q.equals(lastQuery) || !w.hasFindState()) {
             scheduleSearch(0L);
             return;
         }
         final int ticket = ++seq;
         try {
-            w.findNext(q, forward, new BrowserView.FindCallback() {
+            boolean sent = w.findNext(forward, new BrowserView.FindCallback() {
                 @Override
                 public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
                     if (ticket != seq || w != provider.current()) {
@@ -258,6 +260,9 @@ public final class FindInPageController {
                     listener.onFindResult(activeMatchOrdinal, numberOfMatches);
                 }
             });
+            if (!sent) {
+                scheduleSearch(0L);
+            }
         } catch (Exception ignored) {
         }
     }
@@ -290,7 +295,7 @@ public final class FindInPageController {
             listener.onFindResult(ordinal, total);
             return;
         }
-        w.findNext(q, true, new BrowserView.FindCallback() {
+        w.findNext(true, new BrowserView.FindCallback() {
             @Override
             public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
                 if (ticket != seq || w != provider.current()) {
@@ -329,9 +334,16 @@ public final class FindInPageController {
         }
         final String query = q;
         final int ticket = ++seq;
+        if (count != null) {
+            count.setTextColor(defaultCountColor);
+            count.setText("…");
+        }
         w.findAllAsync(q, new BrowserView.FindCallback() {
             @Override
             public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
+                if (input != null && !input.hasFocus() && isShowing()) {
+                    input.requestFocus();
+                }
                 if (ticket == seq && active == provider.current() && query.equals(lastQuery)) {
                     listener.onFindResult(activeMatchOrdinal, numberOfMatches);
                 }
