@@ -42,6 +42,8 @@ public final class FindInPageController {
     private BrowserView active;
     private String lastQuery = "";
     private boolean hasMatch;
+    private int knownTotal;
+    private int stepRetries;
     private int seq;
     private boolean suppressWatcher;
 
@@ -56,12 +58,16 @@ public final class FindInPageController {
         @Override
         public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
             hasMatch = numberOfMatches != 0;
+            if (numberOfMatches > 0) {
+                knownTotal = numberOfMatches;
+            }
             if (count == null) {
                 return;
             }
             if (numberOfMatches != 0) {
+                int shown = numberOfMatches > 0 ? numberOfMatches : knownTotal;
                 count.setTextColor(defaultCountColor);
-                count.setText((activeMatchOrdinal + 1) + "/" + (numberOfMatches < 0 ? "?" : String.valueOf(numberOfMatches)));
+                count.setText((activeMatchOrdinal + 1) + "/" + (shown > 0 ? String.valueOf(shown) : "?"));
             } else {
                 count.setTextColor(lastQuery.isEmpty() ? defaultCountColor : Color.parseColor("#D93025"));
                 count.setText("0/0");
@@ -190,9 +196,16 @@ public final class FindInPageController {
             }
             return false;
         });
-        bar.findViewById(R.id.btnFindNext).setOnClickListener(v -> step(true));
-        bar.findViewById(R.id.btnFindPrev).setOnClickListener(v -> step(false));
-        bar.findViewById(R.id.btnFindClose).setOnClickListener(v -> {
+        View next = bar.findViewById(R.id.btnFindNext);
+        View prev = bar.findViewById(R.id.btnFindPrev);
+        View close = bar.findViewById(R.id.btnFindClose);
+        for (View b : new View[] {next, prev, close}) {
+            b.setFocusable(false);
+            b.setFocusableInTouchMode(false);
+        }
+        next.setOnClickListener(v -> step(true));
+        prev.setOnClickListener(v -> step(false));
+        close.setOnClickListener(v -> {
             suppressWatcher = true;
             input.setText("");
             suppressWatcher = false;
@@ -224,7 +237,18 @@ public final class FindInPageController {
             return;
         }
         try {
-            w.findNext(forward, listener);
+            w.findNext(forward, new BrowserView.FindCallback() {
+                @Override
+                public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
+                    if (numberOfMatches == 0 && !lastQuery.isEmpty() && stepRetries < 1) {
+                        stepRetries++;
+                        scheduleSearch(0L);
+                        return;
+                    }
+                    stepRetries = 0;
+                    listener.onFindResult(activeMatchOrdinal, numberOfMatches);
+                }
+            });
         } catch (Exception ignored) {
         }
     }
@@ -252,6 +276,7 @@ public final class FindInPageController {
             return;
         }
         final String query = q;
+        stepRetries = 0;
         final int ticket = ++seq;
         w.findAllAsync(q, new BrowserView.FindCallback() {
             @Override
@@ -277,6 +302,7 @@ public final class FindInPageController {
 
     private void resetCount() {
         hasMatch = false;
+        knownTotal = 0;
         seq++;
         lastQuery = "";
         if (count != null) {

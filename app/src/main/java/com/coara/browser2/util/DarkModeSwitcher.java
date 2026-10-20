@@ -8,9 +8,9 @@ import com.coara.browser2.gecko.ValueCallback;
 
 public final class DarkModeSwitcher {
     private static final String PROBE = "(function(){try{return window.matchMedia('(prefers-color-scheme: dark)').matches;}catch(e){return null;}})()";
-    private static final long POLL_MS = 120L;
-    private static final long MAX_WAIT_MS = 3000L;
-    private static final long UNKNOWN_WAIT_MS = 700L;
+    private static final long POLL_MS = 90L;
+    private static final long MAX_WAIT_MS = 450L;
+    private static final long UNKNOWN_WAIT_MS = 300L;
     private static final long SETTLE_MS = 80L;
 
     private static int ticket;
