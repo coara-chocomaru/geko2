@@ -96,6 +96,7 @@ import com.coara.browser2.util.SwipeRefreshPolicy;
 import com.coara.browser2.util.BrowserConstants;
 import com.coara.browser2.util.CookiePolicyUi;
 import com.coara.browser2.util.CookieSite;
+import com.coara.browser2.util.DarkModeSwitcher;
 import com.coara.browser2.util.CookieSitePolicy;
 import com.coara.browser2.util.BasicAuthManager;
 import com.coara.browser2.util.ExternalDownloadTabTracker;
@@ -3600,6 +3601,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
     private void enterUrlEditMode() {
         if (urlEditMode || urlEditText == null) return;
+        if (findController != null && findController.isShowing()) {
+            findController.hide();
+        }
         if (!webViews.isEmpty()) {
             KeyboardSettings.hideKeyboardForWebView(this, getCurrentWebView());
         }
@@ -4271,11 +4275,11 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private void updateDarkMode() {
         BrowserEngine.get().setDarkMode(darkModeEnabled);
         applyBrowserVisualSettingsToAllWebViews();
-        UiThread.mainHandler().postDelayed(() -> {
+        DarkModeSwitcher.settle(getCurrentWebView(), darkModeEnabled, () -> {
             if (!isFinishing() && !isDestroyed()) {
                 reloadTabsForSettings();
             }
-        }, 160L);
+        });
     }
 
                             private void disablejs() {
@@ -4360,6 +4364,12 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     }
 
     private void showFindInPageBar() {
+        if (urlEditMode) {
+            exitUrlEditMode();
+        }
+        if (urlEditText != null) {
+            urlEditText.clearFocus();
+        }
         findController().show();
     }
 

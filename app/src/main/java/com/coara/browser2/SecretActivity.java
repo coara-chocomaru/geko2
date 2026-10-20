@@ -75,6 +75,7 @@ import com.google.android.material.textfield.TextInputEditText;
 import com.coara.browser2.util.SafeBrowsingSupport;
 import com.coara.browser2.util.BasicAuthManager;
 import com.coara.browser2.util.CookieSite;
+import com.coara.browser2.util.DarkModeSwitcher;
 import com.coara.browser2.util.CookieSitePolicy;
 import com.coara.browser2.util.ExternalDownloadTabTracker;
 import com.coara.browser2.util.DownloadSupport;
@@ -1957,7 +1958,11 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
 
     private void updateDarkMode() {
         BrowserEngine.get().setDarkMode(darkModeEnabled);
-        reloadTabsForSettings();
+        DarkModeSwitcher.settle(getCurrentWebView(), darkModeEnabled, () -> {
+            if (!isFinishing() && !isDestroyed()) {
+                reloadTabsForSettings();
+            }
+        });
     }
 
                             private void disablejs() {
