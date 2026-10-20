@@ -13,6 +13,7 @@ import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
@@ -28,7 +29,9 @@ public final class FindInPageController {
         BrowserView current();
     }
 
-    private static final long DEBOUNCE_MS = 160L;
+    private static final long DEBOUNCE_MS = 100L;
+    private static final long COMPOSITION_RECHECK_MS = 70L;
+    private static final long PAGE_RELOAD_SEARCH_DELAY_MS = 220L;
 
     private final Activity activity;
     private final SharedPreferences pref;
@@ -51,30 +54,14 @@ public final class FindInPageController {
     private final Runnable searchTask = new Runnable() {
         @Override
         public void run() {
-            search();
-        }
-    };
-
-    private final BrowserView.FindCallback listener = new BrowserView.FindCallback() {
-        @Override
-        public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
-            hasMatch = numberOfMatches != 0;
-            if (numberOfMatches > 0) {
-                knownTotal = numberOfMatches;
-            }
-            if (count == null) {
+            if (!isShowing() || input == null) {
                 return;
             }
-            if (numberOfMatches != 0) {
-                String shown = numberOfMatches > 0
-                        ? String.valueOf(numberOfMatches)
-                        : knownTotal > 0 ? String.valueOf(knownTotal) : "…";
-                count.setTextColor(defaultCountColor);
-                count.setText((activeMatchOrdinal + 1) + "/" + shown);
-            } else {
-                count.setTextColor(lastQuery.isEmpty() ? defaultCountColor : Color.parseColor("#D93025"));
-                count.setText("0/0");
+            if (hasComposingText()) {
+                handler.postDelayed(this, COMPOSITION_RECHECK_MS);
+                return;
             }
+            search();
         }
     };
 
@@ -97,6 +84,8 @@ public final class FindInPageController {
         input.selectAll();
         if (input.getText().length() > 0) {
             scheduleSearch(0L);
+        } else {
+            showNoResults(false);
         }
         InputMethodManager imm = (InputMethodManager) activity.getSystemService(Context.INPUT_METHOD_SERVICE);
         if (imm != null) {
@@ -109,9 +98,11 @@ public final class FindInPageController {
             return;
         }
         handler.removeCallbacks(searchTask);
+        seq++;
+        searchPending = false;
         clearActive();
         bar.setVisibility(View.GONE);
-        resetCount();
+        showNoResults(false);
         InputMethodManager imm = (InputMethodManager) activity.getSystemService(Context.INPUT_METHOD_SERVICE);
         if (imm != null) {
             imm.hideSoftInputFromWindow(input.getWindowToken(), 0);
@@ -123,15 +114,17 @@ public final class FindInPageController {
             return;
         }
         handler.removeCallbacks(searchTask);
+        seq++;
+        searchPending = false;
         if (previous != null) {
-            try {
-                previous.clearMatches();
-            } catch (Exception ignored) {
-            }
+            previous.clearMatches();
         }
         active = null;
-        resetCount();
-        if (input.getText().toString().trim().length() > 0) {
+        lastQuery = "";
+        hasMatch = false;
+        knownTotal = 0;
+        showNoResults(false);
+        if (!input.getText().toString().trim().isEmpty()) {
             scheduleSearch(0L);
         }
     }
@@ -141,20 +134,22 @@ public final class FindInPageController {
             return;
         }
         handler.removeCallbacks(searchTask);
-        try {
-            view.clearMatches();
-        } catch (Exception ignored) {
-        }
+        seq++;
+        searchPending = false;
+        view.clearMatches();
         active = view;
-        resetCount();
+        lastQuery = "";
+        hasMatch = false;
+        knownTotal = 0;
+        showNoResults(false);
     }
 
     public void onPageFinished(BrowserView view) {
         if (!isShowing() || view == null || view != provider.current()) {
             return;
         }
-        if (input.getText().toString().trim().length() > 0) {
-            scheduleSearch(250L);
+        if (!input.getText().toString().trim().isEmpty()) {
+            scheduleSearch(PAGE_RELOAD_SEARCH_DELAY_MS);
         }
     }
 
@@ -174,7 +169,7 @@ public final class FindInPageController {
         KeyboardSettings.applyToEditor(input, pref);
         input.addTextChangedListener(new TextWatcher() {
             @Override
-            public void beforeTextChanged(CharSequence s, int start, int before, int after) {
+            public void beforeTextChanged(CharSequence s, int start, int before, int count) {
             }
 
             @Override
@@ -182,11 +177,11 @@ public final class FindInPageController {
             }
 
             @Override
-            public void afterTextChanged(Editable s) {
+            public void afterTextChanged(Editable editable) {
                 if (suppressWatcher) {
                     return;
                 }
-                String query = s.toString().trim();
+                String query = editable.toString().trim();
                 if (query.equals(lastTypedQuery)) {
                     return;
                 }
@@ -199,11 +194,7 @@ public final class FindInPageController {
                     count.setTextColor(defaultCountColor);
                     count.setText(query.isEmpty() ? "0/0" : "…");
                 }
-                BrowserView current = provider.current();
-                long adaptive = current == null
-                        ? DEBOUNCE_MS
-                        : Math.max(DEBOUNCE_MS, Math.min(700L, current.lastFindMillis()));
-                scheduleSearch(query.isEmpty() ? 0L : adaptive);
+                scheduleSearch(DEBOUNCE_MS);
             }
         });
         input.setOnEditorActionListener((v, actionId, event) -> {
@@ -243,9 +234,18 @@ public final class FindInPageController {
         activity.addContentView(bar, params);
     }
 
+    private boolean hasComposingText() {
+        if (input == null) {
+            return false;
+        }
+        Editable editable = input.getText();
+        return BaseInputConnection.getComposingSpanStart(editable) >= 0
+                && BaseInputConnection.getComposingSpanEnd(editable) >= 0;
+    }
+
     private void scheduleSearch(long delay) {
         handler.removeCallbacks(searchTask);
-        handler.postDelayed(searchTask, delay);
+        handler.postDelayed(searchTask, Math.max(0L, delay));
     }
 
     private void submit() {
@@ -261,14 +261,8 @@ public final class FindInPageController {
             search();
             return;
         }
-        if (searchPending) {
-            return;
-        }
-        if (hasMatch) {
+        if (searchPending || hasMatch) {
             step(true);
-        } else {
-            handler.removeCallbacks(searchTask);
-            search();
         }
     }
 
@@ -282,27 +276,18 @@ public final class FindInPageController {
             scheduleSearch(0L);
             return;
         }
-        if (searchPending || !hasMatch) {
+        if (!searchPending && !hasMatch) {
             return;
         }
         final int ticket = ++seq;
         searchPending = true;
-        try {
-            boolean sent = view.findNext(forward, new BrowserView.FindCallback() {
-                @Override
-                public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
-                    if (ticket != seq || view != provider.current() || !query.equals(lastQuery)) {
-                        return;
-                    }
-                    searchPending = false;
-                    listener.onFindResult(activeMatchOrdinal, numberOfMatches);
-                }
-            });
-            if (!sent) {
-                searchPending = false;
-                scheduleSearch(0L);
+        boolean accepted = view.findNext(forward, new BrowserView.FindCallback() {
+            @Override
+            public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
+                publishResult(view, query, ticket, activeMatchOrdinal, numberOfMatches);
             }
-        } catch (Exception ignored) {
+        });
+        if (!accepted) {
             searchPending = false;
             scheduleSearch(0L);
         }
@@ -312,24 +297,21 @@ public final class FindInPageController {
         BrowserView view = provider.current();
         if (view == null) {
             clearActive();
-            resetCount();
+            showNoResults(false);
             return;
         }
         String query = input.getText().toString().trim();
         if (active != null && active != view) {
-            try {
-                active.clearMatches();
-            } catch (Exception ignored) {
-            }
+            active.clearMatches();
         }
         active = view;
         lastQuery = query;
         if (query.isEmpty()) {
-            try {
-                view.clearMatches();
-            } catch (Exception ignored) {
-            }
-            resetCount();
+            view.clearMatches();
+            hasMatch = false;
+            searchPending = false;
+            knownTotal = 0;
+            showNoResults(false);
             return;
         }
         knownTotal = 0;
@@ -343,35 +325,53 @@ public final class FindInPageController {
         view.findAllAsync(query, new BrowserView.FindCallback() {
             @Override
             public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
-                if (ticket != seq || active != provider.current() || !query.equals(lastQuery)) {
-                    return;
-                }
-                searchPending = false;
-                listener.onFindResult(activeMatchOrdinal, numberOfMatches);
+                publishResult(view, query, ticket, activeMatchOrdinal, numberOfMatches);
             }
         });
+    }
+
+    private void publishResult(BrowserView view, String query, int ticket, int activeMatchOrdinal, int numberOfMatches) {
+        if (ticket != seq || !isShowing() || view != provider.current() || active != view || !query.equals(lastQuery)) {
+            return;
+        }
+        searchPending = false;
+        hasMatch = numberOfMatches != 0;
+        if (numberOfMatches > 0) {
+            knownTotal = numberOfMatches;
+        }
+        if (count == null) {
+            return;
+        }
+        if (numberOfMatches != 0) {
+            String shown = numberOfMatches > 0
+                    ? String.valueOf(numberOfMatches)
+                    : knownTotal > 0 ? String.valueOf(knownTotal) : "…";
+            count.setTextColor(defaultCountColor);
+            count.setText((activeMatchOrdinal + 1) + "/" + shown);
+        } else {
+            count.setTextColor(Color.parseColor("#D93025"));
+            count.setText("0/0");
+        }
     }
 
     private void clearActive() {
         BrowserView view = active != null ? active : provider.current();
         if (view != null) {
-            try {
-                view.clearMatches();
-            } catch (Exception ignored) {
-            }
+            view.clearMatches();
         }
         active = null;
         lastQuery = "";
-    }
-
-    private void resetCount() {
         hasMatch = false;
         searchPending = false;
         knownTotal = 0;
-        seq++;
-        lastQuery = "";
+    }
+
+    private void showNoResults(boolean invalid) {
+        hasMatch = false;
+        searchPending = false;
+        knownTotal = 0;
         if (count != null) {
-            count.setTextColor(defaultCountColor);
+            count.setTextColor(invalid ? Color.parseColor("#D93025") : defaultCountColor);
             count.setText("0/0");
         }
     }
