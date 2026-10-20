@@ -122,6 +122,9 @@ public class DownloadHistoryManager {
         if (context == null || downloadId <= 0) {
             return;
         }
+        if (status == DownloadManager.STATUS_SUCCESSFUL && totalSize <= 0L && downloadedSize > 0L) {
+            totalSize = downloadedSize;
+        }
         SharedPreferences pref = context.getSharedPreferences(BrowserConstants.PREF_NAME, Context.MODE_PRIVATE);
         synchronized (HISTORY_LOCK) {
             try {

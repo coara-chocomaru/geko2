@@ -121,6 +121,7 @@ public class DownloadHistoryActivity extends AppCompatActivity {
                     if (u.status == DownloadManager.STATUS_SUCCESSFUL) {
                         String path = pathById.get(e.getKey());
                         u.fileExists = itemExists(path, u.localUri);
+                        resolveFinalSize(u, path);
                     }
                 }
                 updateHandler.post(() -> {
@@ -402,6 +403,9 @@ public class DownloadHistoryActivity extends AppCompatActivity {
                 }
                 item.host = DayLabeler.hostOf(item.downloadUrl);
                 item.fileExists = itemExists(item.filePath, item.localUri);
+                if (item.status == DownloadManager.STATUS_SUCCESSFUL && item.fileExists) {
+                    resolveFinalSize(item, item.filePath);
+                }
                 long ts = obj.optLong("addedAt", 0L);
                 if (ts <= 0L) ts = item.timestamp;
                 if (ts <= 0L) ts = obj.optLong("manualUpdatedAt", 0L);
@@ -486,13 +490,45 @@ public class DownloadHistoryActivity extends AppCompatActivity {
         return !DownloadSupport.isBlank(filePath) && new File(filePath).exists();
     }
 
+    private void resolveFinalSize(DownloadItem item, String filePath) {
+        if (item == null || item.status != DownloadManager.STATUS_SUCCESSFUL) {
+            return;
+        }
+        long best = Math.max(item.totalSize, item.downloadedSize);
+        if (item.totalSize <= 0L || item.downloadedSize > item.totalSize) {
+            long actual = getItemSize(filePath, item.localUri);
+            if (actual > 0L) {
+                best = actual;
+            }
+        }
+        if (best > 0L) {
+            item.totalSize = best;
+            item.downloadedSize = best;
+        }
+    }
+
     private long getItemSize(String filePath, String localUri) {
         if (!DownloadSupport.isBlank(localUri)) {
             try {
                 Uri uri = Uri.parse(localUri);
                 if ("content".equalsIgnoreCase(uri.getScheme())) {
                     try (android.content.res.AssetFileDescriptor fd = getContentResolver().openAssetFileDescriptor(uri, "r")) {
-                        if (fd != null && fd.getLength() > 0) return fd.getLength();
+                        if (fd != null) {
+                            if (fd.getLength() > 0) return fd.getLength();
+                            try {
+                                long stat = fd.getParcelFileDescriptor().getStatSize();
+                                if (stat > 0) return stat;
+                            } catch (Exception ignored) {
+                            }
+                        }
+                    } catch (Exception ignored) {
+                    }
+                    try (Cursor c = getContentResolver().query(uri, new String[]{android.provider.OpenableColumns.SIZE}, null, null, null)) {
+                        if (c != null && c.moveToFirst() && !c.isNull(0)) {
+                            long size = c.getLong(0);
+                            if (size > 0) return size;
+                        }
+                    } catch (Exception ignored) {
                     }
                 } else if ("file".equalsIgnoreCase(uri.getScheme()) && !DownloadSupport.isBlank(uri.getPath())) {
                     File file = new File(uri.getPath());
@@ -1102,7 +1138,7 @@ public class DownloadHistoryActivity extends AppCompatActivity {
                 case DownloadManager.STATUS_SUCCESSFUL:
                     statusText = deleted
                             ? "ファイルが削除されました"
-                            : joinParts(formatSize(item.totalSize), item.host);
+                            : joinParts(item.totalSize > 0 ? formatSize(item.totalSize) : "", item.host);
                     break;
                 case DownloadManager.STATUS_FAILED:
                     statusText = joinParts("ダウンロードに失敗しました", item.host);
