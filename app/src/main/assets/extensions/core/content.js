@@ -217,6 +217,326 @@
         }
     }
 
+    var FM_MAX = 3000;
+    var FM_MAX_CHARS = 8000000;
+    var FM_SLICE_MS = 9;
+    var fm = null;
+    var FM_BLOCK = {};
+    var FM_SKIP = {};
+    ("DIV P LI UL OL TABLE TR TD TH TBODY THEAD TFOOT CAPTION H1 H2 H3 H4 H5 H6 SECTION ARTICLE HEADER FOOTER NAV ASIDE MAIN FORM FIELDSET LEGEND BLOCKQUOTE PRE DL DT DD HR BR FIGURE FIGCAPTION DETAILS SUMMARY ADDRESS BUTTON IFRAME FRAME VIDEO AUDIO CANVAS IMG SVG MATH HGROUP MENU DIALOG CENTER").split(" ").forEach(function (k) {
+        FM_BLOCK[k] = 1;
+    });
+    ("SCRIPT STYLE NOSCRIPT TEMPLATE HEAD TITLE META LINK OBJECT EMBED TEXTAREA SELECT OPTION OPTGROUP DATALIST").split(" ").forEach(function (k) {
+        FM_SKIP[k] = 1;
+    });
+
+    function fmNow() {
+        return (G.performance && G.performance.now) ? G.performance.now() : Date.now();
+    }
+
+    function fmRegex(q) {
+        var t = String(q || "").trim();
+        if (!t) {
+            return null;
+        }
+        var parts = t.split(/\s+/);
+        for (var i = 0; i < parts.length; i++) {
+            parts[i] = parts[i].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        }
+        try {
+            return new RegExp(parts.join("\\s+"), "gi");
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function fmParentEl(n) {
+        var p = n.parentNode;
+        if (!p) {
+            return null;
+        }
+        return p.nodeType === 1 ? p : (p.host || null);
+    }
+
+    function fmVisible(el, cache) {
+        if (!el) {
+            return false;
+        }
+        var v = cache.get(el);
+        if (v !== undefined) {
+            return v;
+        }
+        try {
+            if (typeof el.checkVisibility === "function") {
+                v = el.checkVisibility({ checkVisibilityCSS: true });
+            } else {
+                v = el.getClientRects().length > 0;
+            }
+        } catch (e) {
+            v = true;
+        }
+        cache.set(el, v);
+        return v;
+    }
+
+    function fmStop() {
+        if (fm) {
+            fm.stop = true;
+            if (fm.timer) {
+                clearTimeout(fm.timer);
+            }
+        }
+        fm = null;
+    }
+
+    function fmDocHeight() {
+        var d = document.documentElement;
+        var b = document.body;
+        return Math.max(1, d ? d.scrollHeight : 0, b ? b.scrollHeight : 0);
+    }
+
+    function fmFlush(s) {
+        if (!s.parts.length) {
+            return;
+        }
+        var text = s.parts.length === 1 ? s.parts[0] : s.parts.join("");
+        var segs = s.segs;
+        s.parts = [];
+        s.segs = [];
+        s.len = 0;
+        s.chars += text.length;
+        var re = s.re;
+        re.lastIndex = 0;
+        var m;
+        var si = 0;
+        while ((m = re.exec(text)) !== null) {
+            var a = m.index;
+            var b = a + m[0].length;
+            if (b <= a) {
+                re.lastIndex = a + 1;
+                continue;
+            }
+            while (si + 1 < segs.length && segs[si + 1].s <= a) {
+                si++;
+            }
+            var sj = si;
+            while (sj + 1 < segs.length && segs[sj + 1].s < b) {
+                sj++;
+            }
+            try {
+                var r = document.createRange();
+                r.setStart(segs[si].n, a - segs[si].s);
+                r.setEnd(segs[sj].n, b - segs[sj].s);
+                s.ranges.push(r);
+            } catch (e) {
+            }
+            if (s.ranges.length >= FM_MAX) {
+                s.capped = true;
+                return;
+            }
+        }
+    }
+
+    function fmScan(s) {
+        s.timer = 0;
+        if (s.stop || fm !== s) {
+            return;
+        }
+        var t0 = fmNow();
+        var stack = s.stack;
+        while (stack.length && !s.capped && s.chars < FM_MAX_CHARS) {
+            if (fmNow() - t0 > FM_SLICE_MS) {
+                s.timer = setTimeout(function () {
+                    fmScan(s);
+                }, 0);
+                return;
+            }
+            var n = stack.pop();
+            if (n === null) {
+                fmFlush(s);
+                continue;
+            }
+            var type = n.nodeType;
+            if (type === 3) {
+                var data = n.nodeValue;
+                if (data && fmVisible(fmParentEl(n), s.vis)) {
+                    s.segs.push({ n: n, s: s.len });
+                    s.parts.push(data);
+                    s.len += data.length;
+                }
+                continue;
+            }
+            if (type !== 1 && type !== 11 && type !== 9) {
+                continue;
+            }
+            var tag = type === 1 ? n.nodeName.toUpperCase() : "";
+            if (FM_SKIP[tag]) {
+                continue;
+            }
+            var block = !!FM_BLOCK[tag];
+            if (block) {
+                fmFlush(s);
+                stack.push(null);
+            }
+            var kids = n.childNodes;
+            for (var i = kids.length - 1; i >= 0; i--) {
+                stack.push(kids[i]);
+            }
+            if (type === 1) {
+                var sr = null;
+                try {
+                    sr = n.openOrClosedShadowRoot || n.shadowRoot;
+                } catch (e) {
+                    sr = null;
+                }
+                if (sr) {
+                    stack.push(sr);
+                }
+            }
+        }
+        fmFlush(s);
+        s.pos = 0;
+        s.rects = [];
+        fmRects(s);
+    }
+
+    function fmRects(s) {
+        s.timer = 0;
+        if (s.stop || fm !== s) {
+            return;
+        }
+        var t0 = fmNow();
+        var list = s.ranges;
+        var sy = G.pageYOffset || 0;
+        while (s.pos < list.length) {
+            if (fmNow() - t0 > FM_SLICE_MS) {
+                s.timer = setTimeout(function () {
+                    fmRects(s);
+                }, 0);
+                return;
+            }
+            var r = list[s.pos++];
+            var y = -1;
+            try {
+                var rc = r.getClientRects();
+                var box = rc.length ? rc[0] : r.getBoundingClientRect();
+                if (box && (box.height > 0 || box.width > 0)) {
+                    y = box.top + sy;
+                }
+            } catch (e) {
+                y = -1;
+            }
+            s.rects.push(y);
+        }
+        var keep = [];
+        var ys = [];
+        for (var i = 0; i < list.length; i++) {
+            if (s.rects[i] >= 0) {
+                keep.push(list[i]);
+                ys.push(s.rects[i]);
+            }
+        }
+        var h = fmDocHeight();
+        var f = [];
+        for (var j = 0; j < ys.length; j++) {
+            f.push(Math.round(Math.min(1, Math.max(0, ys[j] / h)) * 10000) / 10000);
+        }
+        s.ranges = keep;
+        s.done = true;
+        s.vis = null;
+        s.stack = null;
+        send({ t: "fmap", gen: s.gen, q: s.q, n: keep.length, capped: !!s.capped, f: f });
+    }
+
+    function fmStart(gen, q) {
+        fmStop();
+        var re = fmRegex(q);
+        var root = document.body || document.documentElement;
+        if (!re || !root) {
+            send({ t: "fmap", gen: gen, q: String(q || ""), n: 0, capped: false, f: [] });
+            return true;
+        }
+        var s = {
+            gen: gen,
+            q: String(q),
+            re: re,
+            stack: [root],
+            vis: new Map(),
+            parts: [],
+            segs: [],
+            len: 0,
+            ranges: [],
+            chars: 0,
+            capped: false,
+            done: false,
+            stop: false,
+            timer: 0
+        };
+        fm = s;
+        s.timer = setTimeout(function () {
+            fmScan(s);
+        }, 0);
+        return true;
+    }
+
+    function fmJump(gen, i) {
+        var s = fm;
+        if (!s || !s.done || s.gen !== gen) {
+            return false;
+        }
+        var r = s.ranges[i];
+        if (!r) {
+            return false;
+        }
+        try {
+            var sc = r.startContainer;
+            if (!sc || !sc.isConnected) {
+                return false;
+            }
+            var el = fmParentEl(sc);
+            var box = r.getClientRects();
+            var first = box.length ? box[0] : r.getBoundingClientRect();
+            var vh = G.innerHeight || 0;
+            if (!first || first.top < 0 || first.bottom > vh) {
+                if (el && el.scrollIntoView) {
+                    el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+                }
+                box = r.getClientRects();
+                first = box.length ? box[0] : r.getBoundingClientRect();
+                if (first && (first.top < 0 || first.bottom > vh)) {
+                    G.scrollBy({ top: first.top - vh * 0.4, left: 0, behavior: "instant" });
+                }
+            }
+            var sel = G.getSelection();
+            if (sel) {
+                sel.removeAllRanges();
+                sel.addRange(r.cloneRange());
+            }
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function fmActiveY() {
+        try {
+            var sel = G.getSelection();
+            if (!sel || sel.rangeCount < 1) {
+                return -1;
+            }
+            var r = sel.getRangeAt(0);
+            var rc = r.getClientRects();
+            var box = rc.length ? rc[0] : r.getBoundingClientRect();
+            if (!box || (box.width === 0 && box.height === 0)) {
+                return -1;
+            }
+            var v = ((box.top + (G.pageYOffset || 0)) / fmDocHeight());
+            return Math.round(Math.min(1, Math.max(0, v)) * 10000) / 10000;
+        } catch (e) {
+            return -1;
+        }
+    }
+
     var bridge = {
         touchpadNative: function (kind, a, b) {
             send({ t: "call", fn: "touchpadNative", a: [Number(kind), Number(a), Number(b)] });
@@ -232,6 +552,11 @@
         G.__coaraAgent = { send: send };
     }
     G.AndroidBridge = bridge;
+    try {
+        Object.defineProperty(G, "__coaraFind", { value: { start: fmStart, stop: fmStop, jump: fmJump, activeY: fmActiveY }, configurable: true });
+    } catch (e) {
+        G.__coaraFind = { start: fmStart, stop: fmStop, jump: fmJump, activeY: fmActiveY };
+    }
 
 
     send({ t: "hello", top: isTop, url: String(location.href) });
