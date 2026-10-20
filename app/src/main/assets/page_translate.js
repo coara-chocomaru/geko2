@@ -19,7 +19,8 @@
             done: new WeakSet(),
             active: true,
             dirty: 0,
-            obs: null,
+            observers: [],
+            observedRoots: new WeakSet(),
             sk: 'script,style,noscript,textarea,code,pre,kbd,samp,svg,math,select,[translate="no"],.notranslate,[contenteditable=""],[contenteditable="true"]'
         };
         S.apply = function (base, arr) {
@@ -39,45 +40,72 @@
                 n.nodeValue = v;
             }
         };
-        S.restore = function () {
-            var i, n;
-            if (S.obs) {
-                S.obs.disconnect();
-            }
-            for (i = 0; i < S.nodes.length; i++) {
-                n = S.nodes[i];
-                if (n && n.isConnected && S.tr.has(n) && S.orig.has(n) && n.nodeValue === S.tr.get(n)) {
-                    n.nodeValue = S.orig.get(n);
-                }
-            }
-            S.active = false;
-            S.nodes = [];
-            delete window.__coaraTr;
-        };
-        if (window.MutationObserver) {
-            S.obs = new MutationObserver(function (ms) {
-                var i, m, n;
-                for (i = 0; i < ms.length; i++) {
-                    m = ms[i];
-                    if (m.type === 'characterData') {
-                        n = m.target;
-                        if (S.tr.has(n)) {
-                            if (n.nodeValue !== S.tr.get(n)) {
-                                S.tr.delete(n);
-                                S.done.delete(n);
-                                S.dirty = 1;
-                            }
-                        } else if (!S.done.has(n) && n.nodeValue && re.test(n.nodeValue)) {
+    }
+    if (!S.observers) {
+        S.observers = [];
+    }
+    if (!S.observedRoots) {
+        S.observedRoots = new WeakSet();
+    }
+    S.watchRoot = function (root) {
+        if (!root || !window.MutationObserver || S.observedRoots.has(root)) {
+            return;
+        }
+        var observer = new MutationObserver(function (ms) {
+            var i, m, n;
+            for (i = 0; i < ms.length; i++) {
+                m = ms[i];
+                if (m.type === 'characterData') {
+                    n = m.target;
+                    if (S.tr.has(n)) {
+                        if (n.nodeValue !== S.tr.get(n)) {
+                            S.tr.delete(n);
+                            S.done.delete(n);
                             S.dirty = 1;
                         }
-                    } else if (m.addedNodes && m.addedNodes.length) {
+                    } else if (!S.done.has(n) && n.nodeValue && re.test(n.nodeValue)) {
                         S.dirty = 1;
                     }
+                } else if (m.addedNodes && m.addedNodes.length) {
+                    S.dirty = 1;
                 }
-            });
-            S.obs.observe(document.documentElement, {childList: true, subtree: true, characterData: true});
+            }
+        });
+        try {
+            observer.observe(root, {childList: true, subtree: true, characterData: true});
+            S.observedRoots.add(root);
+            S.observers.push(observer);
+        } catch (e) {
+            observer.disconnect();
         }
-    }
+    };
+    S.restore = function () {
+        var i, n;
+        if (S.observers) {
+            for (i = 0; i < S.observers.length; i++) {
+                try {
+                    S.observers[i].disconnect();
+                } catch (e) {
+                }
+            }
+            S.observers.length = 0;
+        }
+        if (S.obs) {
+            try {
+                S.obs.disconnect();
+            } catch (e) {
+            }
+        }
+        for (i = 0; i < S.nodes.length; i++) {
+            n = S.nodes[i];
+            if (n && n.isConnected && S.tr.has(n) && S.orig.has(n) && n.nodeValue === S.tr.get(n)) {
+                n.nodeValue = S.orig.get(n);
+            }
+        }
+        S.active = false;
+        S.nodes = [];
+        delete window.__coaraTr;
+    };
     S.dirty = 0;
     for (var k = 0; k < S.nodes.length; k++) {
         if (S.nodes[k] && !S.nodes[k].isConnected) {
@@ -85,28 +113,51 @@
         }
     }
     var root = document.body || document.documentElement;
-    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    var roots = [root];
+    var seenRoots = new WeakSet();
+    seenRoots.add(root);
+    S.watchRoot(document.documentElement);
     var vis = [];
     var rest = [];
     var vh = window.innerHeight || 800;
-    var node, v, p, r;
-    while ((node = walker.nextNode())) {
-        if (S.done.has(node)) {
-            continue;
+    var rootIndex = 0;
+    var rootNode, walker, walkNode, node, v, p, r, shadow;
+    while (rootIndex < roots.length) {
+        rootNode = roots[rootIndex++];
+        if (rootNode.nodeType === 11) {
+            S.watchRoot(rootNode);
         }
-        v = node.nodeValue;
-        if (!v || !re.test(v)) {
-            continue;
-        }
-        p = node.parentElement;
-        if (!p || p.closest(S.sk)) {
-            continue;
-        }
-        r = p.getBoundingClientRect();
-        if (r.bottom >= 0 && r.top <= vh * 2) {
-            vis.push(node);
-        } else {
-            rest.push(node);
+        walker = document.createTreeWalker(rootNode, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, null);
+        while ((walkNode = walker.nextNode())) {
+            if (walkNode.nodeType === 1) {
+                shadow = walkNode.shadowRoot;
+                if (shadow && !seenRoots.has(shadow) && !walkNode.matches(S.sk) && !walkNode.closest(S.sk)) {
+                    seenRoots.add(shadow);
+                    roots.push(shadow);
+                }
+                continue;
+            }
+            if (walkNode.nodeType !== 3) {
+                continue;
+            }
+            node = walkNode;
+            if (S.done.has(node)) {
+                continue;
+            }
+            v = node.nodeValue;
+            if (!v || !re.test(v)) {
+                continue;
+            }
+            p = node.parentElement;
+            if (!p || p.closest(S.sk)) {
+                continue;
+            }
+            r = p.getBoundingClientRect();
+            if (r.bottom >= 0 && r.top <= vh * 2) {
+                vis.push(node);
+            } else {
+                rest.push(node);
+            }
         }
     }
     var all = vis.concat(rest);
