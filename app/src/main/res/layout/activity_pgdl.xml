@@ -23,19 +23,12 @@
         android:checked="true"
         android:text="JavaScript有効（動的ページ対応）" />
 
-    <Switch
-        android:id="@+id/localPathSwitch"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:text="リソースをローカルに保存してパス書換" />
-
     <Button
         android:id="@+id/saveButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="HTML保存開始" />
+        android:text="MHT保存開始" />
 
     <FrameLayout
         android:id="@+id/webViewHost"
