@@ -26,10 +26,14 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -252,10 +256,6 @@ public final class PageTranslator {
         }
         int base = result.optInt("base", 0);
         String lang = result.optString("lang", "");
-        if (first && session.silent && session.source == null && primary(lang).equals(primary(session.target))) {
-            abort(session, "");
-            return;
-        }
         if (session.source != null && session.source.equals(primary(session.target))) {
             abort(session, "翻訳元と翻訳先が同じ言語です");
             return;
@@ -268,20 +268,108 @@ public final class PageTranslator {
     }
 
     private static void detect(Session session, String[] texts, String htmlLang, int base) {
-        StringBuilder sample = new StringBuilder();
+        ArrayList<String> candidates = new ArrayList<>();
+        Set<String> uniqueCandidates = new HashSet<>();
         for (String text : texts) {
-            if (sample.length() >= 800) {
+            if (text == null) {
+                continue;
+            }
+            String value = text.trim();
+            if (value.length() >= 18 && uniqueCandidates.add(value)) {
+                candidates.add(value);
+            }
+        }
+        Collections.sort(candidates, Comparator.comparingInt(String::length).reversed());
+        if (candidates.size() > 12) {
+            candidates.subList(12, candidates.size()).clear();
+        }
+        StringBuilder sample = new StringBuilder();
+        for (String candidate : candidates) {
+            if (sample.length() >= 1200) {
                 break;
             }
-            sample.append(text).append(' ');
+            int remaining = 1200 - sample.length();
+            sample.append(candidate, 0, Math.min(candidate.length(), remaining)).append(' ');
+        }
+        if (sample.length() < 24) {
+            for (String text : texts) {
+                if (text != null && !text.trim().isEmpty()) {
+                    sample.append(text.trim()).append(' ');
+                    if (sample.length() >= 1200) {
+                        break;
+                    }
+                }
+            }
+        }
+        final String detectionSample = sample.toString();
+        try {
+            identifier().identifyLanguage(detectionSample)
+                    .addOnSuccessListener(tag -> onInitialLanguageDetected(session, tag, candidates, htmlLang, base, texts))
+                    .addOnFailureListener(e -> onInitialLanguageDetected(session, "und", candidates, htmlLang, base, texts));
+        } catch (Throwable t) {
+            onInitialLanguageDetected(session, "und", candidates, htmlLang, base, texts);
+        }
+    }
+
+    private static void onInitialLanguageDetected(Session session, String tag, ArrayList<String> candidates,
+                                                   String htmlLang, int base, String[] texts) {
+        if (!alive(session)) {
+            return;
+        }
+        String detected = primary(tag);
+        String target = primary(session.target);
+        if (!detected.isEmpty() && !"und".equals(detected) && !detected.equals(target)) {
+            onSource(session, detected, htmlLang, base, texts);
+            return;
+        }
+        probeLanguageCandidates(session, candidates, 0, detected, htmlLang, base, texts);
+    }
+
+    private static void probeLanguageCandidates(Session session, ArrayList<String> candidates, int index,
+                                                String initialDetected, String htmlLang, int base, String[] texts) {
+        if (!alive(session)) {
+            return;
+        }
+        if (index >= candidates.size() || index >= 8) {
+            String target = primary(session.target);
+            String pageLanguage = primary(htmlLang);
+            if (session.allowOnline && !textsEmpty(texts)) {
+                onSource(session, "auto", htmlLang, base, texts);
+            } else if (target.equals(initialDetected) || target.equals(pageLanguage)) {
+                abort(session, "このページは" + TranslateSettings.labelFor(session.target) + "です");
+            } else if (!pageLanguage.isEmpty()) {
+                onSource(session, pageLanguage, htmlLang, base, texts);
+            } else {
+                abort(session, "ページの言語を判定できませんでした");
+            }
+            return;
         }
         try {
-            identifier().identifyLanguage(sample.toString())
-                    .addOnSuccessListener(tag -> onSource(session, tag, htmlLang, base, texts))
-                    .addOnFailureListener(e -> onSource(session, "und", htmlLang, base, texts));
+            identifier().identifyLanguage(candidates.get(index))
+                    .addOnSuccessListener(tag -> {
+                        String detected = primary(tag);
+                        if (!detected.isEmpty() && !"und".equals(detected)
+                                && !detected.equals(primary(session.target))) {
+                            onSource(session, detected, htmlLang, base, texts);
+                        } else {
+                            probeLanguageCandidates(session, candidates, index + 1, initialDetected,
+                                    htmlLang, base, texts);
+                        }
+                    })
+                    .addOnFailureListener(e -> probeLanguageCandidates(session, candidates, index + 1,
+                            initialDetected, htmlLang, base, texts));
         } catch (Throwable t) {
-            onSource(session, "und", htmlLang, base, texts);
+            probeLanguageCandidates(session, candidates, index + 1, initialDetected, htmlLang, base, texts);
         }
+    }
+
+    private static boolean textsEmpty(String[] texts) {
+        for (String text : texts) {
+            if (text != null && !text.trim().isEmpty()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static void onSource(Session session, String tag, String htmlLang, int base, String[] texts) {
@@ -291,14 +379,23 @@ public final class PageTranslator {
         }
         String source = primary(tag);
         if (source.isEmpty() || "und".equals(source)) {
-            source = primary(htmlLang);
-        }
-        if (source.isEmpty()) {
-            source = "auto";
+            String pageLanguage = primary(htmlLang);
+            if (!pageLanguage.isEmpty() && !pageLanguage.equals(primary(session.target))) {
+                source = pageLanguage;
+            } else if (session.allowOnline) {
+                source = "auto";
+            } else {
+                abort(session, "ページの言語を判定できませんでした");
+                return;
+            }
         }
         if (source.equals(primary(session.target))) {
-            abort(session, "このページは" + TranslateSettings.labelFor(session.target) + "です");
-            return;
+            if (session.allowOnline) {
+                source = "auto";
+            } else {
+                abort(session, "このページは" + TranslateSettings.labelFor(session.target) + "です");
+                return;
+            }
         }
         session.source = source;
         dispatch(session, base, texts);
