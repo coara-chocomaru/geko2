@@ -13,6 +13,7 @@ import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
@@ -51,6 +52,17 @@ public final class FindInPageController {
     private int lastOrdinal;
     private int searchGeneration;
     private boolean suppressWatcher;
+    private FindMarkerView marker;
+    private final int[] locA = new int[2];
+    private final int[] locB = new int[2];
+    private final int[] locC = new int[2];
+    private final ViewTreeObserver.OnGlobalLayoutListener layoutListener = new ViewTreeObserver.OnGlobalLayoutListener() {
+        @Override
+        public void onGlobalLayout() {
+            updateMarkerBounds();
+        }
+    };
+    private boolean layoutListenerAttached;
 
     private final Runnable searchTask = new Runnable() {
         @Override
@@ -81,6 +93,7 @@ public final class FindInPageController {
             build();
         }
         bar.setVisibility(View.VISIBLE);
+        attachLayoutListener();
         input.requestFocus();
         input.selectAll();
         if (input.getText().length() > 0) {
@@ -102,6 +115,8 @@ public final class FindInPageController {
         searchGeneration++;
         searchPending = false;
         clearActive();
+        clearMarker();
+        detachLayoutListener();
         bar.setVisibility(View.GONE);
         showNoResults(false);
         InputMethodManager imm = (InputMethodManager) activity.getSystemService(Context.INPUT_METHOD_SERVICE);
@@ -120,6 +135,7 @@ public final class FindInPageController {
         if (previous != null) {
             previous.clearMatches();
         }
+        clearMarker();
         active = null;
         lastQuery = "";
         hasMatch = false;
@@ -138,6 +154,7 @@ public final class FindInPageController {
         searchGeneration++;
         searchPending = false;
         view.clearMatches();
+        clearMarker();
         active = view;
         lastQuery = "";
         hasMatch = false;
@@ -159,6 +176,118 @@ public final class FindInPageController {
         searchGeneration++;
         searchPending = false;
         clearActive();
+        clearMarker();
+        detachLayoutListener();
+    }
+
+    private void attachLayoutListener() {
+        if (layoutListenerAttached) {
+            return;
+        }
+        View root = activity.findViewById(android.R.id.content);
+        if (root != null) {
+            root.getViewTreeObserver().addOnGlobalLayoutListener(layoutListener);
+            layoutListenerAttached = true;
+        }
+    }
+
+    private void detachLayoutListener() {
+        if (!layoutListenerAttached) {
+            return;
+        }
+        View root = activity.findViewById(android.R.id.content);
+        if (root != null && root.getViewTreeObserver().isAlive()) {
+            root.getViewTreeObserver().removeOnGlobalLayoutListener(layoutListener);
+        }
+        layoutListenerAttached = false;
+    }
+
+    private void clearMarker() {
+        if (marker != null) {
+            marker.clear();
+        }
+    }
+
+    private void updateMarkerBounds() {
+        if (marker == null || bar == null || marker.getVisibility() != View.VISIBLE) {
+            return;
+        }
+        BrowserView view = provider.current();
+        View root = activity.findViewById(android.R.id.content);
+        if (view == null || root == null) {
+            return;
+        }
+        view.getLocationInWindow(locA);
+        root.getLocationInWindow(locB);
+        int top = locA[1] - locB[1];
+        int bottom = top + view.getHeight();
+        if (bar.getVisibility() == View.VISIBLE) {
+            bar.getLocationInWindow(locC);
+            bottom = Math.min(bottom, locC[1] - locB[1]);
+        }
+        int height = Math.max(0, bottom - top);
+        ViewGroup.LayoutParams raw = marker.getLayoutParams();
+        if (!(raw instanceof FrameLayout.LayoutParams)) {
+            return;
+        }
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) raw;
+        if (lp.topMargin != top || lp.height != height) {
+            lp.topMargin = top;
+            lp.height = height;
+            marker.setLayoutParams(lp);
+        }
+    }
+
+    private void requestMarkers(final BrowserView view, final String query, final int ticket) {
+        view.requestFindMap(query, new BrowserView.FindMapCallback() {
+            @Override
+            public void onFindMap(float[] fractions, boolean capped) {
+                if (ticket != searchGeneration || !isShowing() || view != provider.current()
+                        || marker == null || !query.equals(lastQuery)) {
+                    return;
+                }
+                marker.setTicks(fractions);
+                updateMarkerBounds();
+                refreshActiveTick(view, ticket);
+            }
+        });
+    }
+
+    private void refreshActiveTick(final BrowserView view, final int ticket) {
+        if (marker == null || !marker.hasTicks()) {
+            return;
+        }
+        view.queryActiveFraction(new BrowserView.FractionCallback() {
+            @Override
+            public void onFraction(float fraction) {
+                if (ticket != searchGeneration || !isShowing() || view != provider.current() || marker == null) {
+                    return;
+                }
+                marker.setActiveFraction(fraction);
+            }
+        });
+    }
+
+    private void onTickSelected(final int index) {
+        final BrowserView w = provider.current();
+        if (w == null || !isShowing() || lastQuery.isEmpty()) {
+            return;
+        }
+        final int generation = searchGeneration;
+        final String q = lastQuery;
+        w.jumpToMatch(index, new BrowserView.FindCallback() {
+            @Override
+            public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
+                if (generation != searchGeneration || w != provider.current() || !isShowing()
+                        || !q.equals(lastQuery)) {
+                    return;
+                }
+                publishResult(w, q, generation, activeMatchOrdinal, numberOfMatches);
+                if (marker != null) {
+                    marker.setActiveIndex(index);
+                }
+            }
+        });
     }
 
     private void build() {
@@ -187,6 +316,7 @@ public final class FindInPageController {
                     return;
                 }
                 lastTypedQuery = query;
+                clearMarker();
                 searchGeneration++;
                 searchPending = false;
                 hasMatch = false;
@@ -228,6 +358,15 @@ public final class FindInPageController {
             suppressWatcher = false;
             hide();
         });
+        marker = new FindMarkerView(activity);
+        marker.setListener(new FindMarkerView.Listener() {
+            @Override
+            public void onTickSelected(int index) {
+                FindInPageController.this.onTickSelected(index);
+            }
+        });
+        activity.addContentView(marker, new FrameLayout.LayoutParams(
+                marker.preferredWidthPx(), 0, Gravity.END | Gravity.TOP));
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -291,6 +430,7 @@ public final class FindInPageController {
                         return;
                     }
                     publishResult(w, q, generation, activeMatchOrdinal, numberOfMatches);
+                    refreshActiveTick(w, generation);
                 }
             });
             if (!sent) {
@@ -324,6 +464,7 @@ public final class FindInPageController {
         knownTotal = 0;
         hasMatch = false;
         lastOrdinal = 0;
+        clearMarker();
         final int ticket = ++searchGeneration;
         searchPending = true;
         if (count != null) {
@@ -334,6 +475,9 @@ public final class FindInPageController {
             @Override
             public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
                 publishResult(view, query, ticket, activeMatchOrdinal, numberOfMatches);
+                if (numberOfMatches != 0 && ticket == searchGeneration) {
+                    requestMarkers(view, query, ticket);
+                }
             }
         });
     }
@@ -385,6 +529,7 @@ public final class FindInPageController {
         searchPending = false;
         knownTotal = 0;
         lastOrdinal = 0;
+        clearMarker();
         if (count != null) {
             count.setTextColor(invalid ? Color.parseColor("#D93025") : defaultCountColor);
             count.setText("0/0");

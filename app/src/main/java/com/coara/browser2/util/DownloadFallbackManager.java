@@ -762,7 +762,7 @@ public final class DownloadFallbackManager {
                 PublicStorageWriter.abort(context, target);
                 return FallbackResult.failure("保存を確定できませんでした");
             }
-            long finalBytes = responseLength > 0 ? responseLength : progressTotal;
+            long finalBytes = copy.bytes > 0 ? copy.bytes : (responseLength > 0 ? responseLength : progressTotal);
             DownloadHistoryManager.updateManualDownloadMetadata(context, downloadId, spec.url, spec.userAgent, spec.referer,
                     finalMime, finalDisposition, spec.basicAuthEnabled, fileName, target.displayPath, target.localUri);
             DownloadHistoryManager.updateManualDownload(context, downloadId, fileName, target.displayPath, target.localUri,
