@@ -474,6 +474,11 @@ public class BrowserView extends GeckoView {
             loadUrl(failed);
             return;
         }
+        if (actual != null && (actual.startsWith("http://") || actual.startsWith("https://"))) {
+            session.load(new GeckoSession.Loader().uri(actual)
+                    .flags(GeckoSession.LOAD_FLAGS_REPLACE_HISTORY | GeckoSession.LOAD_FLAGS_BYPASS_CACHE));
+            return;
+        }
         session.reload(GeckoSession.LOAD_FLAGS_BYPASS_CACHE);
     }
 
