@@ -48,7 +48,8 @@ public final class FindInPageController {
     private boolean hasMatch;
     private boolean searchPending;
     private int knownTotal;
-    private int seq;
+    private int lastOrdinal;
+    private int searchGeneration;
     private boolean suppressWatcher;
 
     private final Runnable searchTask = new Runnable() {
@@ -98,7 +99,7 @@ public final class FindInPageController {
             return;
         }
         handler.removeCallbacks(searchTask);
-        seq++;
+        searchGeneration++;
         searchPending = false;
         clearActive();
         bar.setVisibility(View.GONE);
@@ -114,7 +115,7 @@ public final class FindInPageController {
             return;
         }
         handler.removeCallbacks(searchTask);
-        seq++;
+        searchGeneration++;
         searchPending = false;
         if (previous != null) {
             previous.clearMatches();
@@ -134,7 +135,7 @@ public final class FindInPageController {
             return;
         }
         handler.removeCallbacks(searchTask);
-        seq++;
+        searchGeneration++;
         searchPending = false;
         view.clearMatches();
         active = view;
@@ -155,7 +156,7 @@ public final class FindInPageController {
 
     public void release() {
         handler.removeCallbacks(searchTask);
-        seq++;
+        searchGeneration++;
         searchPending = false;
         clearActive();
     }
@@ -186,7 +187,7 @@ public final class FindInPageController {
                     return;
                 }
                 lastTypedQuery = query;
-                seq++;
+                searchGeneration++;
                 searchPending = false;
                 hasMatch = false;
                 knownTotal = 0;
@@ -267,29 +268,35 @@ public final class FindInPageController {
     }
 
     private void step(final boolean forward) {
-        final BrowserView view = provider.current();
-        final String query = input.getText().toString().trim();
-        if (view == null || query.isEmpty()) {
+        final BrowserView w = provider.current();
+        final String q = input.getText().toString().trim();
+        if (w == null || q.isEmpty()) {
             return;
         }
-        if (!query.equals(lastQuery) || active != view || !view.hasFindState()) {
+        if (!q.equals(lastQuery) || !w.hasFindState()) {
             scheduleSearch(0L);
             return;
         }
-        if (!searchPending && !hasMatch) {
-            return;
-        }
-        final int ticket = ++seq;
-        searchPending = true;
-        boolean accepted = view.findNext(forward, new BrowserView.FindCallback() {
-            @Override
-            public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
-                publishResult(view, query, ticket, activeMatchOrdinal, numberOfMatches);
+        final int generation = searchGeneration;
+        try {
+            boolean sent = w.findNextFast(q, forward, new BrowserView.FindCallback() {
+                @Override
+                public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
+                    if (generation != searchGeneration || w != provider.current()
+                            || !q.equals(lastQuery) || !isShowing()) {
+                        return;
+                    }
+                    if (numberOfMatches == 0 && knownTotal > 0 && hasMatch) {
+                        publishResult(w, q, generation, lastOrdinal, knownTotal);
+                        return;
+                    }
+                    publishResult(w, q, generation, activeMatchOrdinal, numberOfMatches);
+                }
+            });
+            if (!sent) {
+                scheduleSearch(0L);
             }
-        });
-        if (!accepted) {
-            searchPending = false;
-            scheduleSearch(0L);
+        } catch (Exception ignored) {
         }
     }
 
@@ -316,7 +323,8 @@ public final class FindInPageController {
         }
         knownTotal = 0;
         hasMatch = false;
-        final int ticket = ++seq;
+        lastOrdinal = 0;
+        final int ticket = ++searchGeneration;
         searchPending = true;
         if (count != null) {
             count.setTextColor(defaultCountColor);
@@ -331,13 +339,18 @@ public final class FindInPageController {
     }
 
     private void publishResult(BrowserView view, String query, int ticket, int activeMatchOrdinal, int numberOfMatches) {
-        if (ticket != seq || !isShowing() || view != provider.current() || active != view || !query.equals(lastQuery)) {
+        if (ticket != searchGeneration || !isShowing() || view != provider.current() || active != view || !query.equals(lastQuery)) {
             return;
         }
         searchPending = false;
         hasMatch = numberOfMatches != 0;
         if (numberOfMatches > 0) {
             knownTotal = numberOfMatches;
+        }
+        if (numberOfMatches != 0) {
+            lastOrdinal = Math.max(0, activeMatchOrdinal);
+        } else {
+            lastOrdinal = 0;
         }
         if (count == null) {
             return;
@@ -364,12 +377,14 @@ public final class FindInPageController {
         hasMatch = false;
         searchPending = false;
         knownTotal = 0;
+        lastOrdinal = 0;
     }
 
     private void showNoResults(boolean invalid) {
         hasMatch = false;
         searchPending = false;
         knownTotal = 0;
+        lastOrdinal = 0;
         if (count != null) {
             count.setTextColor(invalid ? Color.parseColor("#D93025") : defaultCountColor);
             count.setText("0/0");
