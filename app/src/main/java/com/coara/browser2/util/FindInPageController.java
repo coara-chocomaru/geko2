@@ -29,7 +29,6 @@ public final class FindInPageController {
     }
 
     private static final long DEBOUNCE_MS = 160L;
-    private static final int MAX_RESTORE_STEPS = 400;
 
     private final Activity activity;
     private final SharedPreferences pref;
@@ -42,9 +41,10 @@ public final class FindInPageController {
     private int defaultCountColor;
     private BrowserView active;
     private String lastQuery = "";
+    private String lastTypedQuery = "";
     private boolean hasMatch;
+    private boolean searchPending;
     private int knownTotal;
-    private int lastOrdinal;
     private int seq;
     private boolean suppressWatcher;
 
@@ -59,7 +59,6 @@ public final class FindInPageController {
         @Override
         public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
             hasMatch = numberOfMatches != 0;
-            lastOrdinal = activeMatchOrdinal;
             if (numberOfMatches > 0) {
                 knownTotal = numberOfMatches;
             }
@@ -67,7 +66,9 @@ public final class FindInPageController {
                 return;
             }
             if (numberOfMatches != 0) {
-                String shown = numberOfMatches > 0 ? String.valueOf(numberOfMatches) : (knownTotal > 0 ? String.valueOf(knownTotal) : "1000+");
+                String shown = numberOfMatches > 0
+                        ? String.valueOf(numberOfMatches)
+                        : knownTotal > 0 ? String.valueOf(knownTotal) : "…";
                 count.setTextColor(defaultCountColor);
                 count.setText((activeMatchOrdinal + 1) + "/" + shown);
             } else {
@@ -125,12 +126,12 @@ public final class FindInPageController {
         if (previous != null) {
             try {
                 previous.clearMatches();
-                            } catch (Exception ignored) {
+            } catch (Exception ignored) {
             }
         }
         active = null;
         resetCount();
-        if (input.getText().length() > 0) {
+        if (input.getText().toString().trim().length() > 0) {
             scheduleSearch(0L);
         }
     }
@@ -144,6 +145,7 @@ public final class FindInPageController {
             view.clearMatches();
         } catch (Exception ignored) {
         }
+        active = view;
         resetCount();
     }
 
@@ -158,6 +160,8 @@ public final class FindInPageController {
 
     public void release() {
         handler.removeCallbacks(searchTask);
+        seq++;
+        searchPending = false;
         clearActive();
     }
 
@@ -170,20 +174,36 @@ public final class FindInPageController {
         KeyboardSettings.applyToEditor(input, pref);
         input.addTextChangedListener(new TextWatcher() {
             @Override
-            public void beforeTextChanged(CharSequence s, int start, int c, int after) {
+            public void beforeTextChanged(CharSequence s, int start, int before, int after) {
             }
 
             @Override
-            public void onTextChanged(CharSequence s, int start, int before, int c) {
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
             }
 
             @Override
             public void afterTextChanged(Editable s) {
-                if (!suppressWatcher) {
-                    BrowserView cur = provider.current();
-                long adaptive = cur == null ? DEBOUNCE_MS : Math.max(DEBOUNCE_MS, Math.min(700L, cur.lastFindMillis()));
-                scheduleSearch(adaptive);
+                if (suppressWatcher) {
+                    return;
                 }
+                String query = s.toString().trim();
+                if (query.equals(lastTypedQuery)) {
+                    return;
+                }
+                lastTypedQuery = query;
+                seq++;
+                searchPending = false;
+                hasMatch = false;
+                knownTotal = 0;
+                if (count != null) {
+                    count.setTextColor(defaultCountColor);
+                    count.setText(query.isEmpty() ? "0/0" : "…");
+                }
+                BrowserView current = provider.current();
+                long adaptive = current == null
+                        ? DEBOUNCE_MS
+                        : Math.max(DEBOUNCE_MS, Math.min(700L, current.lastFindMillis()));
+                scheduleSearch(query.isEmpty() ? 0L : adaptive);
             }
         });
         input.setOnEditorActionListener((v, actionId, event) -> {
@@ -203,20 +223,23 @@ public final class FindInPageController {
         View next = bar.findViewById(R.id.btnFindNext);
         View prev = bar.findViewById(R.id.btnFindPrev);
         View close = bar.findViewById(R.id.btnFindClose);
-        for (View b : new View[] {next, prev, close}) {
-            b.setFocusable(false);
-            b.setFocusableInTouchMode(false);
+        for (View button : new View[] {next, prev, close}) {
+            button.setFocusable(false);
+            button.setFocusableInTouchMode(false);
         }
         next.setOnClickListener(v -> step(true));
         prev.setOnClickListener(v -> step(false));
         close.setOnClickListener(v -> {
             suppressWatcher = true;
             input.setText("");
+            lastTypedQuery = "";
             suppressWatcher = false;
             hide();
         });
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM);
         activity.addContentView(bar, params);
     }
 
@@ -226,136 +249,114 @@ public final class FindInPageController {
     }
 
     private void submit() {
-        String q = input.getText().toString().trim();
-        if (!q.equals(lastQuery)) {
+        String query = input.getText().toString().trim();
+        BrowserView current = provider.current();
+        if (query.isEmpty()) {
             handler.removeCallbacks(searchTask);
             search();
-        } else {
+            return;
+        }
+        if (current == null || !query.equals(lastQuery) || active != current || !current.hasFindState()) {
+            handler.removeCallbacks(searchTask);
+            search();
+            return;
+        }
+        if (searchPending) {
+            return;
+        }
+        if (hasMatch) {
             step(true);
+        } else {
+            handler.removeCallbacks(searchTask);
+            search();
         }
     }
 
     private void step(final boolean forward) {
-        final BrowserView w = provider.current();
-        final String q = input.getText().toString().trim();
-        if (w == null || q.isEmpty()) {
+        final BrowserView view = provider.current();
+        final String query = input.getText().toString().trim();
+        if (view == null || query.isEmpty()) {
             return;
         }
-        if (!hasMatch || !q.equals(lastQuery) || !w.hasFindState()) {
+        if (!query.equals(lastQuery) || active != view || !view.hasFindState()) {
             scheduleSearch(0L);
             return;
         }
+        if (searchPending || !hasMatch) {
+            return;
+        }
         final int ticket = ++seq;
+        searchPending = true;
         try {
-            boolean sent = w.findNext(forward, new BrowserView.FindCallback() {
+            boolean sent = view.findNext(forward, new BrowserView.FindCallback() {
                 @Override
                 public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
-                    if (ticket != seq || w != provider.current()) {
+                    if (ticket != seq || view != provider.current() || !query.equals(lastQuery)) {
                         return;
                     }
-                    if (numberOfMatches == 0) {
-                        recover(w, q, forward, ticket);
-                        return;
-                    }
+                    searchPending = false;
                     listener.onFindResult(activeMatchOrdinal, numberOfMatches);
                 }
             });
             if (!sent) {
+                searchPending = false;
                 scheduleSearch(0L);
             }
         } catch (Exception ignored) {
+            searchPending = false;
+            scheduleSearch(0L);
         }
-    }
-
-    private void recover(final BrowserView w, final String q, final boolean forward, final int ticket) {
-        final int total = knownTotal;
-        final int from = lastOrdinal;
-        w.findAllAsync(q, new BrowserView.FindCallback() {
-            @Override
-            public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
-                if (ticket != seq || w != provider.current()) {
-                    return;
-                }
-                if (numberOfMatches == 0) {
-                    listener.onFindResult(0, 0);
-                    return;
-                }
-                int count = numberOfMatches > 0 ? numberOfMatches : total;
-                int target = 0;
-                if (count > 0) {
-                    target = forward ? (from + 1) % count : (from - 1 + count) % count;
-                }
-                advance(w, q, ticket, activeMatchOrdinal, numberOfMatches, Math.min(target, MAX_RESTORE_STEPS));
-            }
-        });
-    }
-
-    private void advance(final BrowserView w, final String q, final int ticket, final int ordinal, final int total, final int remaining) {
-        if (remaining <= 0) {
-            listener.onFindResult(ordinal, total);
-            return;
-        }
-        w.findNext(true, new BrowserView.FindCallback() {
-            @Override
-            public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
-                if (ticket != seq || w != provider.current()) {
-                    return;
-                }
-                if (numberOfMatches == 0) {
-                    listener.onFindResult(ordinal, total);
-                    return;
-                }
-                advance(w, q, ticket, activeMatchOrdinal, numberOfMatches, remaining - 1);
-            }
-        });
     }
 
     private void search() {
-        BrowserView w = provider.current();
-        if (w == null) {
+        BrowserView view = provider.current();
+        if (view == null) {
+            clearActive();
+            resetCount();
             return;
         }
-        String q = input.getText().toString().trim();
-        if (active != null && active != w) {
+        String query = input.getText().toString().trim();
+        if (active != null && active != view) {
             try {
                 active.clearMatches();
-                            } catch (Exception ignored) {
+            } catch (Exception ignored) {
             }
         }
-        active = w;
-        lastQuery = q;
-        if (q.isEmpty()) {
+        active = view;
+        lastQuery = query;
+        if (query.isEmpty()) {
             try {
-                w.clearMatches();
+                view.clearMatches();
             } catch (Exception ignored) {
             }
             resetCount();
             return;
         }
-        final String query = q;
+        knownTotal = 0;
+        hasMatch = false;
         final int ticket = ++seq;
+        searchPending = true;
         if (count != null) {
             count.setTextColor(defaultCountColor);
             count.setText("…");
         }
-        w.findAllAsync(q, new BrowserView.FindCallback() {
+        view.findAllAsync(query, new BrowserView.FindCallback() {
             @Override
             public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
-                if (input != null && !input.hasFocus() && isShowing()) {
-                    input.requestFocus();
+                if (ticket != seq || active != provider.current() || !query.equals(lastQuery)) {
+                    return;
                 }
-                if (ticket == seq && active == provider.current() && query.equals(lastQuery)) {
-                    listener.onFindResult(activeMatchOrdinal, numberOfMatches);
-                }
+                searchPending = false;
+                listener.onFindResult(activeMatchOrdinal, numberOfMatches);
             }
         });
     }
 
     private void clearActive() {
-        BrowserView w = active != null ? active : provider.current();
-        if (w != null) {
+        BrowserView view = active != null ? active : provider.current();
+        if (view != null) {
             try {
-                w.clearMatches();
+                view.clearMatches();
             } catch (Exception ignored) {
             }
         }
@@ -365,8 +366,8 @@ public final class FindInPageController {
 
     private void resetCount() {
         hasMatch = false;
+        searchPending = false;
         knownTotal = 0;
-        lastOrdinal = 0;
         seq++;
         lastQuery = "";
         if (count != null) {
