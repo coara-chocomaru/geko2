@@ -87,6 +87,7 @@ public final class PageTranslator {
         boolean mlRunning;
         boolean polling;
         int pending;
+        int initialRetries;
         long pollMs = POLL_MS;
 
         Session(BrowserView view, boolean allowOnline, boolean silent, String target, String fixedSource) {
@@ -242,7 +243,7 @@ public final class PageTranslator {
         int count = array == null ? 0 : array.length();
         if (count == 0) {
             if (first) {
-                abort(session, "翻訳できるテキストがありません");
+                retryInitialExtraction(session);
             } else {
                 session.pollMs = Math.min(POLL_MAX_MS, session.pollMs + 500L);
                 schedulePoll(session);
@@ -265,6 +266,22 @@ public final class PageTranslator {
         } else {
             dispatch(session, base, texts);
         }
+    }
+
+    private static void retryInitialExtraction(Session session) {
+        if (!alive(session)) {
+            return;
+        }
+        if (session.initialRetries >= 6) {
+            abort(session, "翻訳できるテキストがありません");
+            return;
+        }
+        session.initialRetries++;
+        UiThread.mainHandler().postDelayed(() -> {
+            if (alive(session)) {
+                extract(session, true);
+            }
+        }, 350L);
     }
 
     private static void detect(Session session, String[] texts, String htmlLang, int base) {
