@@ -716,11 +716,8 @@ public class BrowserView extends GeckoView {
         }
     }
 
-    private static final long FIND_HEAVY_MS = 700L;
-    private static final String FIND_DECOY = "\uFFFF\uFFFE";
     private int findToken;
-    private String findSent;
-    private boolean findHeavy;
+    private String findQuery;
     private long findLastMs;
 
     public long lastFindMillis() {
@@ -728,105 +725,116 @@ public class BrowserView extends GeckoView {
     }
 
     public boolean hasFindState() {
-        return findSent != null;
+        return findQuery != null;
     }
 
     public void resetFindState() {
-        findSent = null;
-        findToken++;
-    }
-
-    private static String freshVariant(String query, String previous) {
-        char[] chars = query.toCharArray();
-        for (int i = 0; i < chars.length; i++) {
-            char c = chars[i];
-            char flipped = Character.isUpperCase(c) ? Character.toLowerCase(c) : Character.isLowerCase(c) ? Character.toUpperCase(c) : c;
-            if (flipped != c && Character.toLowerCase(flipped) == Character.toLowerCase(c)) {
-                chars[i] = flipped;
-                String candidate = new String(chars);
-                if (!candidate.equals(previous)) {
-                    return candidate;
-                }
-                chars[i] = c;
-            }
-        }
-        return query.equals(previous) ? null : query;
+        clearMatches();
     }
 
     private void runFind(final String query, final int flags, final FindCallback callback) {
+        final GeckoSession target = session;
+        if (target == null || destroyed) {
+            if (callback != null) {
+                callback.onFindResult(0, 0);
+            }
+            return;
+        }
         final int token = ++findToken;
         final long started = android.os.SystemClock.uptimeMillis();
-        GeckoResult<GeckoSession.FinderResult> result;
+        final GeckoResult<GeckoSession.FinderResult> result;
         try {
-            result = session.getFinder().find(query, flags);
-        } catch (Throwable t) {
+            result = target.getFinder().find(query, flags);
+        } catch (Throwable error) {
+            if (token == findToken && target == session) {
+                findQuery = null;
+                if (callback != null) {
+                    callback.onFindResult(0, 0);
+                }
+            }
             return;
         }
         if (result == null) {
+            if (token == findToken && target == session) {
+                findQuery = null;
+                if (callback != null) {
+                    callback.onFindResult(0, 0);
+                }
+            }
             return;
         }
-        result.then(new GeckoResult.OnValueListener<GeckoSession.FinderResult, Void>() {
-            @Override
-            public GeckoResult<Void> onValue(GeckoSession.FinderResult r) {
-                if (token != findToken || r == null) {
+        try {
+            result.then(new GeckoResult.OnValueListener<GeckoSession.FinderResult, Void>() {
+                @Override
+                public GeckoResult<Void> onValue(GeckoSession.FinderResult value) {
+                    if (token != findToken || target != session || destroyed) {
+                        return null;
+                    }
+                    findLastMs = Math.max(0L, android.os.SystemClock.uptimeMillis() - started);
+                    if (value == null || !value.found || value.current <= 0) {
+                        if (callback != null) {
+                            callback.onFindResult(0, 0);
+                        }
+                    } else if (callback != null) {
+                        callback.onFindResult(value.current - 1, value.total > 0 ? value.total : -1);
+                    }
                     return null;
                 }
-                long took = android.os.SystemClock.uptimeMillis() - started;
-                findLastMs = took;
-                boolean heavy = took > FIND_HEAVY_MS;
-                if (heavy != findHeavy && session != null) {
-                    findHeavy = heavy;
-                    session.getFinder().setDisplayFlags(heavy ? 0 : GeckoSession.FINDER_DISPLAY_HIGHLIGHT_ALL);
-                }
-                if (callback != null) {
-                    callback.onFindResult(r.found ? Math.max(0, r.current - 1) : 0, r.found ? (r.total < 0 ? -1 : r.total) : 0);
-                }
-                return null;
-            }
-        }, new GeckoResult.OnExceptionListener<Void>() {
-            @Override
-            public GeckoResult<Void> onException(Throwable error) {
-                if (token == findToken) {
-                    findSent = null;
-                    if (callback != null) {
-                        callback.onFindResult(0, 0);
+            }, new GeckoResult.OnExceptionListener<Void>() {
+                @Override
+                public GeckoResult<Void> onException(Throwable error) {
+                    if (token == findToken && target == session && !destroyed) {
+                        findQuery = null;
+                        if (callback != null) {
+                            callback.onFindResult(0, 0);
+                        }
                     }
+                    return null;
                 }
-                return null;
+            });
+        } catch (Throwable error) {
+            if (token == findToken && target == session && !destroyed) {
+                findQuery = null;
+                if (callback != null) {
+                    callback.onFindResult(0, 0);
+                }
             }
-        });
+        }
     }
 
     public void findAllAsync(final String query, final FindCallback callback) {
-        if (session == null || query == null || query.isEmpty()) {
+        if (session == null || destroyed || query == null || query.isEmpty()) {
             clearMatches();
             if (callback != null) {
                 callback.onFindResult(0, 0);
             }
             return;
         }
-        int want = findHeavy ? 0 : GeckoSession.FINDER_DISPLAY_HIGHLIGHT_ALL;
-        if (session.getFinder().getDisplayFlags() != want) {
-            session.getFinder().setDisplayFlags(want);
-        }
-        final String variant = freshVariant(query, findSent);
-        if (variant == null) {
-            findSent = FIND_DECOY;
-            runFind(FIND_DECOY, GeckoSession.FINDER_FIND_FORWARD, new FindCallback() {
-                @Override
-                public void onFindResult(int activeIndex, int total) {
-                    findSent = query;
-                    runFind(query, GeckoSession.FINDER_FIND_FORWARD, callback);
-                }
-            });
+        findToken++;
+        findQuery = null;
+        GeckoSession target = session;
+        try {
+            if (target.getFinder().getDisplayFlags() != GeckoSession.FINDER_DISPLAY_HIGHLIGHT_ALL) {
+                target.getFinder().setDisplayFlags(GeckoSession.FINDER_DISPLAY_HIGHLIGHT_ALL);
+            }
+        } catch (Throwable error) {
+            if (callback != null) {
+                callback.onFindResult(0, 0);
+            }
             return;
         }
-        findSent = variant;
-        runFind(variant, GeckoSession.FINDER_FIND_FORWARD, callback);
+        if (destroyed || target != session) {
+            if (callback != null) {
+                callback.onFindResult(0, 0);
+            }
+            return;
+        }
+        findQuery = query;
+        runFind(query, GeckoSession.FINDER_FIND_FORWARD, callback);
     }
 
     public boolean findNext(final boolean forward, final FindCallback callback) {
-        if (session == null || findSent == null) {
+        if (session == null || destroyed || findQuery == null) {
             return false;
         }
         runFind(null, forward ? GeckoSession.FINDER_FIND_FORWARD : GeckoSession.FINDER_FIND_BACKWARDS, callback);
@@ -835,9 +843,14 @@ public class BrowserView extends GeckoView {
 
     public void clearMatches() {
         findToken++;
-        findSent = null;
-        if (session != null) {
-            session.getFinder().clear();
+        findQuery = null;
+        findLastMs = 0L;
+        GeckoSession target = session;
+        if (target != null) {
+            try {
+                target.getFinder().clear();
+            } catch (Throwable ignored) {
+            }
         }
     }
 
