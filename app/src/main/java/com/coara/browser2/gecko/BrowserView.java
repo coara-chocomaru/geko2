@@ -716,7 +716,75 @@ public class BrowserView extends GeckoView {
         }
     }
 
-    public void findAllAsync(String query, final FindCallback callback) {
+    private static final long FIND_TIMEOUT_MS = 1500L;
+    private boolean findBusy;
+    private int findToken;
+    private Runnable findPending;
+
+    private void submitFind(final Runnable job) {
+        if (findBusy) {
+            findPending = job;
+            return;
+        }
+        job.run();
+    }
+
+    private void finishFind(int token) {
+        if (token != findToken) {
+            return;
+        }
+        findBusy = false;
+        Runnable next = findPending;
+        findPending = null;
+        if (next != null) {
+            next.run();
+        }
+    }
+
+    private void runFind(final String query, final int flags, final FindCallback callback) {
+        findBusy = true;
+        final int token = ++findToken;
+        final Runnable timeout = new Runnable() {
+            @Override
+            public void run() {
+                finishFind(token);
+            }
+        };
+        UiThread.mainHandler().postDelayed(timeout, FIND_TIMEOUT_MS);
+        GeckoResult<GeckoSession.FinderResult> result;
+        try {
+            result = session.getFinder().find(query, flags);
+        } catch (Throwable t) {
+            UiThread.mainHandler().removeCallbacks(timeout);
+            finishFind(token);
+            return;
+        }
+        if (result == null) {
+            UiThread.mainHandler().removeCallbacks(timeout);
+            finishFind(token);
+            return;
+        }
+        result.then(new GeckoResult.OnValueListener<GeckoSession.FinderResult, Void>() {
+            @Override
+            public GeckoResult<Void> onValue(GeckoSession.FinderResult r) {
+                UiThread.mainHandler().removeCallbacks(timeout);
+                if (callback != null && r != null && token == findToken) {
+                    callback.onFindResult(r.found ? Math.max(0, r.current - 1) : 0, r.found ? (r.total < 0 ? -1 : r.total) : 0);
+                }
+                finishFind(token);
+                return null;
+            }
+        }, new GeckoResult.OnExceptionListener<Void>() {
+            @Override
+            public GeckoResult<Void> onException(Throwable error) {
+                UiThread.mainHandler().removeCallbacks(timeout);
+                finishFind(token);
+                return null;
+            }
+        });
+    }
+
+    public void findAllAsync(final String query, final FindCallback callback) {
         if (session == null || query == null || query.isEmpty()) {
             clearMatches();
             if (callback != null) {
@@ -727,34 +795,28 @@ public class BrowserView extends GeckoView {
         if (session.getFinder().getDisplayFlags() != GeckoSession.FINDER_DISPLAY_HIGHLIGHT_ALL) {
             session.getFinder().setDisplayFlags(GeckoSession.FINDER_DISPLAY_HIGHLIGHT_ALL);
         }
-        session.getFinder().find(query, 0).then(new GeckoResult.OnValueListener<GeckoSession.FinderResult, Void>() {
+        submitFind(new Runnable() {
             @Override
-            public GeckoResult<Void> onValue(GeckoSession.FinderResult r) {
-                if (callback != null && r != null) {
-                    callback.onFindResult(r.found ? Math.max(0, r.current - 1) : 0, r.found ? (r.total < 0 ? -1 : r.total) : 0);
-                }
-                return null;
+            public void run() {
+                runFind(query, GeckoSession.FINDER_FIND_FORWARD, callback);
             }
         });
     }
 
-    public void findNext(boolean forward, final FindCallback callback) {
-        if (session == null) {
+    public void findNext(final String query, final boolean forward, final FindCallback callback) {
+        if (session == null || query == null || query.isEmpty()) {
             return;
         }
-        session.getFinder().find(null, forward ? GeckoSession.FINDER_FIND_FORWARD : GeckoSession.FINDER_FIND_BACKWARDS)
-                .then(new GeckoResult.OnValueListener<GeckoSession.FinderResult, Void>() {
-                    @Override
-                    public GeckoResult<Void> onValue(GeckoSession.FinderResult r) {
-                        if (callback != null && r != null) {
-                            callback.onFindResult(r.found ? Math.max(0, r.current - 1) : 0, r.found ? (r.total < 0 ? -1 : r.total) : 0);
-                        }
-                        return null;
-                    }
-                });
+        submitFind(new Runnable() {
+            @Override
+            public void run() {
+                runFind(query, forward ? GeckoSession.FINDER_FIND_FORWARD : GeckoSession.FINDER_FIND_BACKWARDS, callback);
+            }
+        });
     }
 
     public void clearMatches() {
+        findPending = null;
         if (session != null) {
             session.getFinder().clear();
         }
