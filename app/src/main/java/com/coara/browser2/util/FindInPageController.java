@@ -41,7 +41,8 @@ public final class FindInPageController {
     private int defaultCountColor;
     private BrowserView active;
     private String lastQuery = "";
-    private int total;
+    private boolean hasMatch;
+    private int seq;
     private boolean suppressWatcher;
 
     private final Runnable searchTask = new Runnable() {
@@ -54,15 +55,14 @@ public final class FindInPageController {
     private final BrowserView.FindCallback listener = new BrowserView.FindCallback() {
         @Override
         public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
-            boolean isDoneCounting = true;
-            total = numberOfMatches;
+            hasMatch = numberOfMatches != 0;
             if (count == null) {
                 return;
             }
-            if (numberOfMatches > 0) {
+            if (numberOfMatches != 0) {
                 count.setTextColor(defaultCountColor);
-                count.setText((activeMatchOrdinal + 1) + "/" + numberOfMatches);
-            } else if (isDoneCounting) {
+                count.setText((activeMatchOrdinal + 1) + "/" + (numberOfMatches < 0 ? "?" : String.valueOf(numberOfMatches)));
+            } else {
                 count.setTextColor(lastQuery.isEmpty() ? defaultCountColor : Color.parseColor("#D93025"));
                 count.setText("0/0");
             }
@@ -199,7 +199,7 @@ public final class FindInPageController {
             hide();
         });
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
         activity.addContentView(bar, params);
     }
 
@@ -220,7 +220,7 @@ public final class FindInPageController {
 
     private void step(boolean forward) {
         BrowserView w = provider.current();
-        if (w == null || total <= 0) {
+        if (w == null || !hasMatch) {
             return;
         }
         try {
@@ -252,10 +252,11 @@ public final class FindInPageController {
             return;
         }
         final String query = q;
+        final int ticket = ++seq;
         w.findAllAsync(q, new BrowserView.FindCallback() {
             @Override
             public void onFindResult(int activeMatchOrdinal, int numberOfMatches) {
-                if (active == provider.current() && query.equals(lastQuery)) {
+                if (ticket == seq && active == provider.current() && query.equals(lastQuery)) {
                     listener.onFindResult(activeMatchOrdinal, numberOfMatches);
                 }
             }
@@ -275,7 +276,8 @@ public final class FindInPageController {
     }
 
     private void resetCount() {
-        total = 0;
+        hasMatch = false;
+        seq++;
         lastQuery = "";
         if (count != null) {
             count.setTextColor(defaultCountColor);
