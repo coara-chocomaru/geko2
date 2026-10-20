@@ -719,12 +719,14 @@ public class BrowserView extends GeckoView {
             }
             return;
         }
-        session.getFinder().setDisplayFlags(GeckoSession.FINDER_DISPLAY_HIGHLIGHT_ALL);
+        if (session.getFinder().getDisplayFlags() != GeckoSession.FINDER_DISPLAY_HIGHLIGHT_ALL) {
+            session.getFinder().setDisplayFlags(GeckoSession.FINDER_DISPLAY_HIGHLIGHT_ALL);
+        }
         session.getFinder().find(query, 0).then(new GeckoResult.OnValueListener<GeckoSession.FinderResult, Void>() {
             @Override
             public GeckoResult<Void> onValue(GeckoSession.FinderResult r) {
                 if (callback != null && r != null) {
-                    callback.onFindResult(r.found ? Math.max(0, r.current - 1) : 0, r.found ? r.total : 0);
+                    callback.onFindResult(r.found ? Math.max(0, r.current - 1) : 0, r.found ? (r.total < 0 ? -1 : r.total) : 0);
                 }
                 return null;
             }
@@ -740,7 +742,7 @@ public class BrowserView extends GeckoView {
                     @Override
                     public GeckoResult<Void> onValue(GeckoSession.FinderResult r) {
                         if (callback != null && r != null) {
-                            callback.onFindResult(r.found ? Math.max(0, r.current - 1) : 0, r.found ? r.total : 0);
+                            callback.onFindResult(r.found ? Math.max(0, r.current - 1) : 0, r.found ? (r.total < 0 ? -1 : r.total) : 0);
                         }
                         return null;
                     }
