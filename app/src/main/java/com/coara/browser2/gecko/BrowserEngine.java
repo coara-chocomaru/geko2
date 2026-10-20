@@ -108,6 +108,11 @@ public final class BrowserEngine {
                 : GeckoRuntimeSettings.COLOR_SCHEME_LIGHT);
         clearLegacyColorSchemePrefs();
         applyContentColorScheme(darkMode);
+        try {
+            GeckoPreferenceController.setGeckoPref("accessibility.typeaheadfind.matchesCountLimit", 500,
+                    GeckoPreferenceController.PREF_BRANCH_USER);
+        } catch (Throwable ignored) {
+        }
         executor = new GeckoWebExecutor(runtime);
         defaultUserAgent = GeckoSession.getDefaultUserAgent();
         installCore();
