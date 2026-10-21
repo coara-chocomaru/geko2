@@ -4131,24 +4131,164 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         historyDirty = false;
         UiThread.mainHandler().removeCallbacks(historySaveRunnable);
         saveHistory();
+
         ArrayList<BrowserView> all;
         synchronized (webViews) {
             all = new ArrayList<>(webViews);
         }
+
         for (BrowserView w : all) {
+            clearPendingSpaHistory(w);
+            Runnable saveTask = stateSaveTasks.remove(w);
+            if (saveTask != null) {
+                UiThread.mainHandler().removeCallbacks(saveTask);
+            }
+            Runnable snapshotTask = snapshotTasks.remove(w);
+            if (snapshotTask != null) {
+                UiThread.mainHandler().removeCallbacks(snapshotTask);
+            }
             try {
-                w.clearHistory();
                 w.clearCache(true);
                 w.clearFormData();
                 w.clearMatches();
             } catch (Exception ignored) {
             }
         }
+
+        stateSaveTasks.clear();
+        snapshotTasks.clear();
         BrowserEngine.get().clearAllBrowsingData();
         clearTabs();
+
         dirtyStateTabs.clear();
         dirtySnapshotTabs.clear();
-        purgeTabFiles();
+        historyPrefix.clear();
+        restoreSeeds.clear();
+        virtualBackGuards.clear();
+        seedAlignedTabs.clear();
+        backNavigationTabs.clear();
+        tabHistoryStates.clear();
+        pendingTabs.clear();
+        staleTabs.clear();
+        externalTabs.clear();
+        popupTabs.clear();
+        pullToRefreshEligibleCache.clear();
+
+        BrowserView previous = webViews.isEmpty() ? null : getCurrentWebView();
+        if (previous != null) {
+            clearPendingSpaHistory(previous);
+            stateSaveTasks.remove(previous);
+            snapshotTasks.remove(previous);
+            tabHistoryStates.remove(previous);
+            pendingTabs.remove(previous);
+            staleTabs.remove(previous);
+            externalTabs.remove(previous);
+            popupTabs.remove(previous);
+            backNavigationTabs.remove(previous);
+            dirtyStateTabs.remove(previous);
+            dirtySnapshotTabs.remove(previous);
+            pullToRefreshEligibleCache.remove(previous);
+            resetHistoryTracking(previous);
+            ExternalDownloadTabTracker.clear(previous);
+            Bitmap oldSnapshot = tabSnapshots.remove(previous);
+            if (oldSnapshot != null && !oldSnapshot.isRecycled()) {
+                try {
+                    oldSnapshot.recycle();
+                } catch (Exception ignored) {
+                }
+            }
+            TouchpadController.clearCurrentWebView(previous);
+        }
+
+        BrowserView replacement = createNewWebView();
+        int replacementId = nextTabId++;
+        replacement.setTag(replacementId);
+        if (previous != null) {
+            int previousIndex = webViews.indexOf(previous);
+            if (previousIndex >= 0) {
+                webViews.set(previousIndex, replacement);
+                currentTabIndex = previousIndex;
+            } else {
+                webViews.clear();
+                webViews.add(replacement);
+                currentTabIndex = 0;
+            }
+            try {
+                previous.stopLoading();
+                previous.destroy();
+            } catch (Exception ignored) {
+            }
+        } else {
+            webViews.clear();
+            webViews.add(replacement);
+            currentTabIndex = 0;
+        }
+
+        tabHistoryStates.clear();
+        tabHistoryStates.put(replacement, new TabHistoryStore.State());
+        webViewContainer.removeAllViews();
+        webViewContainer.addView(replacement);
+        TouchpadController.setCurrentWebView(replacement);
+        updateTabCount();
+
+        try {
+            persistExecutor.execute(() -> {
+                File[] files = getFilesDir().listFiles();
+                if (files != null) {
+                    for (File file : files) {
+                        String name = file.getName();
+                        if ((name.startsWith("tab_state_") && name.endsWith(".dat"))
+                                || (name.startsWith("tab_history_") && name.endsWith(".json"))) {
+                            safeDeleteFile(file);
+                        }
+                    }
+                }
+                if (tabHistoryStore != null) {
+                    tabHistoryStore.deleteAll();
+                }
+            });
+        } catch (Exception ignored) {
+            File[] files = getFilesDir().listFiles();
+            if (files != null) {
+                for (File file : files) {
+                    String name = file.getName();
+                    if ((name.startsWith("tab_state_") && name.endsWith(".dat"))
+                            || (name.startsWith("tab_history_") && name.endsWith(".json"))) {
+                        safeDeleteFile(file);
+                    }
+                }
+            }
+            if (tabHistoryStore != null) {
+                tabHistoryStore.deleteAll();
+            }
+        }
+
+        try {
+            backgroundExecutor.execute(() -> {
+                File[] files = getFilesDir().listFiles();
+                if (files != null) {
+                    for (File file : files) {
+                        String name = file.getName();
+                        if (name.startsWith("tab_snapshot_") && name.endsWith(".png")) {
+                            safeDeleteFile(file);
+                        }
+                    }
+                }
+            });
+        } catch (Exception ignored) {
+            File[] files = getFilesDir().listFiles();
+            if (files != null) {
+                for (File file : files) {
+                    String name = file.getName();
+                    if (name.startsWith("tab_snapshot_") && name.endsWith(".png")) {
+                        safeDeleteFile(file);
+                    }
+                }
+            }
+        }
+
+        replacement.loadUrl(START_PAGE);
+        updatePullToRefreshState(replacement, START_PAGE);
         purgeFaviconFiles();
         if (faviconCache != null) {
             faviconCache.evictAll();
@@ -4161,7 +4301,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         urlEditText.setAutofillHints("");
         urlEditText.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
         urlEditText.setText("");
-        clearTabs();
         Toast.makeText(MainActivity.this, "履歴、検索候補、及びタブとCookieを消去しました", Toast.LENGTH_SHORT).show();
     }
 
