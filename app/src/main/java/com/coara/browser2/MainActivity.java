@@ -4150,7 +4150,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         dirtySnapshotTabs.clear();
         purgeTabFiles();
         purgeFaviconFiles();
-        clearTabs();
         if (faviconCache != null) {
             faviconCache.evictAll();
         }
@@ -4162,6 +4161,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         urlEditText.setAutofillHints("");
         urlEditText.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
         urlEditText.setText("");
+        clearTabs();
         Toast.makeText(MainActivity.this, "履歴、検索候補、及びタブとCookieを消去しました", Toast.LENGTH_SHORT).show();
     }
 
