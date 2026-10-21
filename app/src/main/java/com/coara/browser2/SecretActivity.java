@@ -1790,7 +1790,7 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             String currentText = urlEditText.getText().toString();
             urlEditText.setText("");
             urlEditText.setText(currentText);
-            Toast.makeText(SecretActivity.this, "履歴、フォームデータ、検索候補、及びタブとCookieを消去しました", Toast.LENGTH_SHORT).show();
+            Toast.makeText(SecretActivity.this, "履歴、キャッシュ、タブとCookieを消去しました", Toast.LENGTH_SHORT).show();
         } else if (id == R.id.action_negapoji) {
             applyNegapoji();
         } else if (id == R.id.action_translate) {
