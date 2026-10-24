@@ -4709,6 +4709,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                             old.recycle();
                         }
                         dirtySnapshotTabs.add(webView);
+                        trimSnapshotMemory(webView);
                     } else if (result != null && !result.isRecycled()) {
                         result.recycle();
                     }
@@ -4771,9 +4772,10 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         while (it.hasNext() && tabSnapshots.size() > MAX_MEMORY_SNAPSHOTS) {
             Map.Entry<BrowserView, Bitmap> entry = it.next();
             BrowserView owner = entry.getKey();
-            if (owner == keep || dirtySnapshotTabs.contains(owner)) {
+            if (owner == keep) {
                 continue;
             }
+            dirtySnapshotTabs.remove(owner);
             it.remove();
         }
     }
