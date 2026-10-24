@@ -288,7 +288,31 @@ public class BrowserView extends GeckoView {
         });
         s.setMediaSessionDelegate(new MediaSession.Delegate() {
             @Override
+            public void onActivated(GeckoSession sourceSession, MediaSession mediaSession) {
+                if (sourceSession != session || destroyed) {
+                    return;
+                }
+                if (activeMediaSession != mediaSession) {
+                    activeMediaSession = mediaSession;
+                    mediaPlaying = false;
+                    mediaTitle = "";
+                    mediaArtist = "";
+                }
+                BrowserClient c = client;
+                if (c != null) {
+                    c.onMediaSessionActivated(BrowserView.this, mediaSession,
+                            mediaDisplayTitle(), mediaDisplayArtist());
+                }
+            }
+
+            @Override
             public void onMetadata(GeckoSession sourceSession, MediaSession mediaSession, MediaSession.Metadata metadata) {
+                if (sourceSession != session || destroyed) {
+                    return;
+                }
+                if (activeMediaSession != null && activeMediaSession != mediaSession) {
+                    return;
+                }
                 mediaTitle = metadata == null || metadata.title == null ? "" : metadata.title;
                 mediaArtist = metadata == null || metadata.artist == null ? "" : metadata.artist;
                 BrowserClient c = client;
@@ -299,24 +323,54 @@ public class BrowserView extends GeckoView {
 
             @Override
             public void onPlay(GeckoSession sourceSession, MediaSession mediaSession) {
+                if (sourceSession != session || destroyed) {
+                    return;
+                }
                 activeMediaSession = mediaSession;
                 mediaPlaying = true;
+                sourceSession.getSettings().setSuspendMediaWhenInactive(false);
                 notifyMediaState(mediaSession, true, false);
             }
 
             @Override
             public void onPause(GeckoSession sourceSession, MediaSession mediaSession) {
-                activeMediaSession = mediaSession;
+                if (sourceSession != session || destroyed || activeMediaSession != mediaSession) {
+                    return;
+                }
                 mediaPlaying = false;
+                sourceSession.getSettings().setSuspendMediaWhenInactive(true);
                 notifyMediaState(mediaSession, false, false);
             }
 
             @Override
             public void onStop(GeckoSession sourceSession, MediaSession mediaSession) {
+                if (sourceSession != session || destroyed || activeMediaSession != mediaSession) {
+                    return;
+                }
                 mediaPlaying = false;
+                sourceSession.getSettings().setSuspendMediaWhenInactive(true);
                 notifyMediaState(mediaSession, false, true);
-                if (activeMediaSession == mediaSession) {
-                    activeMediaSession = null;
+                com.coara.browser2.MediaPipActivity.closeForSource(BrowserView.this);
+                activeMediaSession = null;
+            }
+
+            @Override
+            public void onDeactivated(GeckoSession sourceSession, MediaSession mediaSession) {
+                if (sourceSession != session || destroyed || activeMediaSession != mediaSession) {
+                    return;
+                }
+                boolean wasPlaying = mediaPlaying;
+                activeMediaSession = null;
+                mediaPlaying = false;
+                sourceSession.getSettings().setSuspendMediaWhenInactive(true);
+                if (wasPlaying) {
+                    notifyMediaState(mediaSession, false, true);
+                    com.coara.browser2.MediaPipActivity.closeForSource(BrowserView.this);
+                } else {
+                    BrowserClient c = client;
+                    if (c != null) {
+                        c.onMediaSessionDeactivated(BrowserView.this, mediaSession);
+                    }
                 }
             }
         });
@@ -348,30 +402,75 @@ public class BrowserView extends GeckoView {
         }
     }
 
-    public boolean hasActiveMediaPlayback() {
+    public boolean isMediaPlaying() {
         return !destroyed && mediaPlaying && activeMediaSession != null;
-    }
-
-    public boolean canRetainForBackgroundPlayback() {
-        return !destroyed && activeMediaSession != null
-                && com.coara.browser2.MediaPlaybackService.isActiveSession(activeMediaSession);
-    }
-
-    public boolean ownsMediaSession(MediaSession candidate) {
-        return candidate != null && activeMediaSession == candidate;
     }
 
     public boolean requestPictureInPicture() {
         GeckoSession current = session;
-        if (destroyed || current == null || !hasActiveMediaPlayback()) {
+        if (current == null || destroyed || !isMediaPlaying() || pictureInPictureActive) {
             return false;
         }
         try {
-            current.getSessionPictureInPicture().request();
+            current.getSessionPictureInPicture().request().accept(value -> { }, error -> { });
             return true;
         } catch (Throwable ignored) {
             return false;
         }
+    }
+
+    public boolean shouldPreserveForBackgroundPlayback() {
+        return !destroyed && session != null && (pictureInPictureActive
+                || (mediaPlaying && activeMediaSession != null
+                && com.coara.browser2.MediaPlaybackService.isActiveSession(activeMediaSession)));
+    }
+
+    public void destroyPreservingBackgroundPlayback() {
+        if (destroyed) {
+            return;
+        }
+        GeckoSession retained = session;
+        MediaSession mediaSession = activeMediaSession;
+        boolean playing = mediaPlaying;
+        if (retained == null || (!pictureInPictureActive
+                && (mediaSession == null || !com.coara.browser2.MediaPlaybackService.isActiveSession(mediaSession)))) {
+            destroy();
+            return;
+        }
+        destroyed = true;
+        com.coara.browser2.util.PageTranslator.releaseForView(this);
+        findToken++;
+        pendingFindRequests.clear();
+        cancelDeferredFindClear();
+        failPendingEvals();
+        BrowserEngine.get().getAgent().unregister(retained);
+        try {
+            retained.getSessionPictureInPicture().setKeepActive(true);
+            retained.getSettings().setSuspendMediaWhenInactive(false);
+            retained.setActive(true);
+            retained.setPriorityHint(GeckoSession.PRIORITY_HIGH);
+        } catch (Throwable ignored) {
+        }
+        try {
+            releaseSession();
+        } catch (Throwable ignored) {
+        }
+        session = null;
+        try { retained.setNavigationDelegate(null); } catch (Throwable ignored) { }
+        try { retained.setProgressDelegate(null); } catch (Throwable ignored) { }
+        try { retained.setContentDelegate(null); } catch (Throwable ignored) { }
+        try { retained.setHistoryDelegate(null); } catch (Throwable ignored) { }
+        try { retained.setScrollDelegate(null); } catch (Throwable ignored) { }
+        try { retained.setPromptDelegate(null); } catch (Throwable ignored) { }
+        try { retained.setPermissionDelegate(null); } catch (Throwable ignored) { }
+        try { retained.setContentBlockingDelegate(null); } catch (Throwable ignored) { }
+        try { retained.setPictureInPictureDelegate(null); } catch (Throwable ignored) { }
+        com.coara.browser2.MediaPlaybackService.retainGeckoSession(getContext(), retained, mediaSession,
+                playing, mediaDisplayTitle(), mediaDisplayArtist());
+        topPort = null;
+        framePorts.clear();
+        client = null;
+        bridgeListener = null;
     }
 
     public void setPictureInPictureActive(boolean active) {
@@ -380,8 +479,11 @@ public class BrowserView extends GeckoView {
         if (current == null) {
             return;
         }
+        boolean keepMediaSession = !active && (paused || destroyed) && activeMediaSession != null
+                && com.coara.browser2.MediaPlaybackService.isActiveSession(activeMediaSession);
         try {
-            current.getSessionPictureInPicture().setKeepActive(active);
+            current.getSessionPictureInPicture().setKeepActive(active || keepMediaSession);
+            current.getSettings().setSuspendMediaWhenInactive(active || keepMediaSession || mediaPlaying ? false : true);
         } catch (Throwable ignored) {
         }
         if (active) {
@@ -389,8 +491,6 @@ public class BrowserView extends GeckoView {
             current.setPriorityHint(GeckoSession.PRIORITY_HIGH);
             com.coara.browser2.fx.FxExtensionManager.get().onTabActive(current, true);
         } else if (paused || destroyed) {
-            boolean keepMediaSession = activeMediaSession != null
-                    && com.coara.browser2.MediaPlaybackService.isActiveSession(activeMediaSession);
             current.setActive(keepMediaSession);
             current.setPriorityHint(keepMediaSession ? GeckoSession.PRIORITY_HIGH : GeckoSession.PRIORITY_DEFAULT);
             com.coara.browser2.fx.FxExtensionManager.get().onTabActive(current, false);
@@ -876,10 +976,14 @@ public class BrowserView extends GeckoView {
                 session.setActive(true);
                 com.coara.browser2.fx.FxExtensionManager.get().onTabActive(session, true);
             } else if (keepBackgroundMedia) {
+                session.getSessionPictureInPicture().setKeepActive(true);
+                session.getSettings().setSuspendMediaWhenInactive(false);
                 session.setPriorityHint(GeckoSession.PRIORITY_HIGH);
                 session.setActive(true);
                 com.coara.browser2.fx.FxExtensionManager.get().onTabActive(session, false);
             } else {
+                session.getSessionPictureInPicture().setKeepActive(false);
+                session.getSettings().setSuspendMediaWhenInactive(true);
                 session.setPriorityHint(GeckoSession.PRIORITY_DEFAULT);
                 session.setActive(false);
                 com.coara.browser2.fx.FxExtensionManager.get().onTabActive(session, false);
@@ -890,6 +994,8 @@ public class BrowserView extends GeckoView {
     public void onResume() {
         paused = false;
         if (session != null) {
+            session.getSessionPictureInPicture().setKeepActive(pictureInPictureActive);
+            session.getSettings().setSuspendMediaWhenInactive(!mediaPlaying && !pictureInPictureActive);
             session.setActive(true);
             session.setPriorityHint(GeckoSession.PRIORITY_HIGH);
             com.coara.browser2.fx.FxExtensionManager.get().onTabActive(session, true);
@@ -2046,9 +2152,6 @@ public class BrowserView extends GeckoView {
         if (destroyed) {
             return;
         }
-        com.coara.browser2.MediaPlaybackService.onViewDestroyed(this);
-        com.coara.browser2.util.PageTranslator.releaseForView(this);
-        com.coara.browser2.MediaPipActivity.closeForSource(this);
         MediaSession mediaSessionToStop = activeMediaSession;
         activeMediaSession = null;
         mediaPlaying = false;
@@ -2056,6 +2159,7 @@ public class BrowserView extends GeckoView {
             notifyMediaState(mediaSessionToStop, false, true);
         }
         destroyed = true;
+        com.coara.browser2.util.PageTranslator.releaseForView(this);
         findToken++;
         pendingFindRequests.clear();
         cancelDeferredFindClear();
@@ -2190,6 +2294,18 @@ public class BrowserView extends GeckoView {
     private final GeckoSession.ProgressDelegate progressDelegate = new GeckoSession.ProgressDelegate() {
         @Override
         public void onPageStart(GeckoSession s, String uri) {
+            MediaSession previousMediaSession = activeMediaSession;
+            activeMediaSession = null;
+            mediaPlaying = false;
+            mediaTitle = "";
+            mediaArtist = "";
+            s.getSettings().setSuspendMediaWhenInactive(true);
+            if (previousMediaSession != null) {
+                notifyMediaState(previousMediaSession, false, true);
+            }
+            if (pictureInPictureActive) {
+                com.coara.browser2.MediaPipActivity.closeForSource(BrowserView.this);
+            }
             if (uri != null) {
                 if (isWebUrl(url) && !url.equals(uri)) {
                     lastStableUrl = url;

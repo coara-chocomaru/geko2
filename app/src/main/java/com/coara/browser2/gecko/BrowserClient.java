@@ -95,6 +95,12 @@ public interface BrowserClient {
     default void onPictureInPictureClosed(BrowserView view) {
     }
 
+    default void onMediaSessionActivated(BrowserView view, MediaSession mediaSession, String title, String artist) {
+    }
+
+    default void onMediaSessionDeactivated(BrowserView view, MediaSession mediaSession) {
+    }
+
     default void onMediaPlaybackChanged(BrowserView view, MediaSession mediaSession, boolean playing,
                                         boolean stopped, String title, String artist) {
     }
