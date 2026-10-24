@@ -195,6 +195,100 @@
         }
     }
 
+    var cctChannels = Object.create(null);
+
+    function cctOrigin(value) {
+        try {
+            var parsed = new URL(String(value));
+            if (parsed.protocol !== "https:" || parsed.origin !== String(value)
+                    || parsed.username || parsed.password) {
+                return "";
+            }
+            return parsed.origin;
+        } catch (e) {
+            return "";
+        }
+    }
+
+    function cctClose(id) {
+        var channel = cctChannels[String(id)];
+        if (!channel) {
+            return;
+        }
+        delete cctChannels[String(id)];
+        try {
+            channel.port1.onmessage = null;
+            channel.port1.onmessageerror = null;
+            channel.port1.close();
+        } catch (e) {
+        }
+    }
+
+    function cctCloseAll() {
+        Object.keys(cctChannels).forEach(cctClose);
+    }
+
+    function cctOpen(m) {
+        if (!isTop || typeof m.id !== "string" || m.id.length < 1 || m.id.length > 128) {
+            return;
+        }
+        var requestedOrigin = cctOrigin(m.origin);
+        if (!requestedOrigin || requestedOrigin !== G.location.origin || typeof MessageChannel !== "function") {
+            send({ t: "cct.channelError", id: m.id, origin: String(G.location.origin) });
+            return;
+        }
+        cctClose(m.id);
+        var channel;
+        try {
+            channel = new MessageChannel();
+            channel.port1.onmessage = function (event) {
+                if (cctChannels[m.id] !== channel || G.location.origin !== requestedOrigin) {
+                    return;
+                }
+                var message = typeof event.data === "string" ? event.data : stringify(event.data);
+                if (message.length > 16384) {
+                    return;
+                }
+                send({ t: "cct.message", id: m.id, origin: String(G.location.origin), message: message });
+            };
+            channel.port1.onmessageerror = function () {
+                send({ t: "cct.channelError", id: m.id, origin: String(G.location.origin) });
+            };
+            if (typeof channel.port1.start === "function") {
+                channel.port1.start();
+            }
+            cctChannels[m.id] = channel;
+            G.postMessage("channel", requestedOrigin, [channel.port2]);
+            send({ t: "cct.channelReady", id: m.id, origin: String(G.location.origin) });
+        } catch (e) {
+            if (channel) {
+                try { channel.port1.close(); } catch (ignored) { }
+                try { channel.port2.close(); } catch (ignored) { }
+            }
+            delete cctChannels[m.id];
+            send({ t: "cct.channelError", id: m.id, origin: String(G.location.origin) });
+        }
+    }
+
+    function cctSend(m) {
+        if (!isTop || !m || typeof m.id !== "string" || typeof m.message !== "string"
+                || m.message.length > 16384 || cctOrigin(m.origin) !== G.location.origin) {
+            return;
+        }
+        var channel = cctChannels[m.id];
+        if (!channel) {
+            return;
+        }
+        try {
+            channel.port1.postMessage(m.message);
+        } catch (e) {
+            cctClose(m.id);
+            send({ t: "cct.channelError", id: m.id, origin: String(G.location.origin) });
+        }
+    }
+
+    G.addEventListener("pagehide", cctCloseAll, true);
+
     function onNative(m) {
         if (!m || typeof m !== "object") {
             return;
@@ -211,6 +305,15 @@
                 break;
             case "ping":
                 send({ t: "pong" });
+                break;
+            case "cct.open":
+                cctOpen(m);
+                break;
+            case "cct.send":
+                cctSend(m);
+                break;
+            case "cct.close":
+                cctClose(m.id);
                 break;
             default:
                 break;
