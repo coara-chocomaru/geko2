@@ -248,6 +248,7 @@ public class BrowserView extends GeckoView {
     }
 
     private void installDelegates(GeckoSession s) {
+        com.coara.browser2.util.GeckoNativePageTranslator.install(s, this);
         s.setNavigationDelegate(navigationDelegate);
         s.setProgressDelegate(progressDelegate);
         s.setContentDelegate(contentDelegate);
@@ -344,6 +345,32 @@ public class BrowserView extends GeckoView {
         BrowserClient c = client;
         if (c != null) {
             c.onMediaPlaybackChanged(this, mediaSession, playing, stopped, mediaDisplayTitle(), mediaDisplayArtist());
+        }
+    }
+
+    public boolean hasActiveMediaPlayback() {
+        return !destroyed && mediaPlaying && activeMediaSession != null;
+    }
+
+    public boolean canRetainForBackgroundPlayback() {
+        return !destroyed && activeMediaSession != null
+                && com.coara.browser2.MediaPlaybackService.isActiveSession(activeMediaSession);
+    }
+
+    public boolean ownsMediaSession(MediaSession candidate) {
+        return candidate != null && activeMediaSession == candidate;
+    }
+
+    public boolean requestPictureInPicture() {
+        GeckoSession current = session;
+        if (destroyed || current == null || !hasActiveMediaPlayback()) {
+            return false;
+        }
+        try {
+            current.getSessionPictureInPicture().request();
+            return true;
+        } catch (Throwable ignored) {
+            return false;
         }
     }
 
@@ -2019,6 +2046,9 @@ public class BrowserView extends GeckoView {
         if (destroyed) {
             return;
         }
+        com.coara.browser2.MediaPlaybackService.onViewDestroyed(this);
+        com.coara.browser2.util.PageTranslator.releaseForView(this);
+        com.coara.browser2.MediaPipActivity.closeForSource(this);
         MediaSession mediaSessionToStop = activeMediaSession;
         activeMediaSession = null;
         mediaPlaying = false;
