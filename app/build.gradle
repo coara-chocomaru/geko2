@@ -5,7 +5,7 @@ plugins {
 android {
     compileSdk {
         version = release(37) {
-            minorApiLevel = 1
+            minorApiLevel = 2
         }
     }
     namespace = 'com.coara.browser2'
@@ -14,8 +14,8 @@ android {
         applicationId = 'com.coara.browser2'
         minSdk = 26
         targetSdk = 31
-        versionCode = 24
-        versionName = "1.1.1"
+        versionCode = 60
+        versionName = "1.2"
         multiDexEnabled = true
         vectorDrawables.useSupportLibrary = true
         if (project.hasProperty('bundleBuild')) {
