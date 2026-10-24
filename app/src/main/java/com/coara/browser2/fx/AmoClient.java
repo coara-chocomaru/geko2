@@ -28,9 +28,12 @@ public final class AmoClient {
     }
 
     private static final String SEARCH = "https://addons.mozilla.org/api/v5/addons/search/";
-    private static final String USER_AGENT = "Mozilla/5.0 (Android 10; Mobile; rv:157.0) Gecko/157.0 Firefox/157.0";
+    private static final String USER_AGENT = "Mozilla/5.0 (Android 10; Mobile; rv:158.0) Gecko/158.0 Firefox/158.0";
     private static final int TIMEOUT_MS = 15000;
     private static final long MAX_BYTES = 8L * 1024L * 1024L;
+    private static final int MAX_ICON_BYTES = 1024 * 1024;
+    private static final int MAX_ICON_SIDE = 128;
+    private static final int MAX_ICON_REDIRECTS = 3;
 
     private static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(4, runnable -> {
         Thread thread = new Thread(runnable, "coara-amo");
@@ -38,7 +41,12 @@ public final class AmoClient {
         return thread;
     });
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    private static final LruCache<String, Bitmap> ICONS = new LruCache<>(96);
+    private static final LruCache<String, Bitmap> ICONS = new LruCache<String, Bitmap>(1024) {
+        @Override
+        protected int sizeOf(String key, Bitmap value) {
+            return Math.max(1, (value.getByteCount() + 1023) / 1024);
+        }
+    };
 
     private AmoClient() {
     }
@@ -258,25 +266,115 @@ public final class AmoClient {
         }
     }
 
+    private static boolean allowedIconHost(URL url) {
+        if (!"https".equalsIgnoreCase(url.getProtocol()) || url.getUserInfo() != null) {
+            return false;
+        }
+        String host = url.getHost().toLowerCase(Locale.US);
+        return host.equals("addons.mozilla.org") || host.equals("addons.cdn.mozilla.net")
+                || host.equals("static.addons.mozilla.net");
+    }
+
+    private static byte[] downloadIcon(String address) throws Exception {
+        URL current = new URL(address);
+        for (int redirect = 0; redirect <= MAX_ICON_REDIRECTS; redirect++) {
+            if (!allowedIconHost(current)) {
+                throw new java.io.IOException("icon host not allowed");
+            }
+            HttpURLConnection c = null;
+            try {
+                c = (HttpURLConnection) current.openConnection();
+                c.setConnectTimeout(6000);
+                c.setReadTimeout(6000);
+                c.setInstanceFollowRedirects(false);
+                c.setRequestProperty("User-Agent", USER_AGENT);
+                c.setRequestProperty("Accept", "image/*");
+                int code = c.getResponseCode();
+                if (code == HttpURLConnection.HTTP_MOVED_PERM || code == HttpURLConnection.HTTP_MOVED_TEMP
+                        || code == HttpURLConnection.HTTP_SEE_OTHER || code == 307 || code == 308) {
+                    String location = c.getHeaderField("Location");
+                    if (location == null || redirect == MAX_ICON_REDIRECTS) {
+                        throw new java.io.IOException("too many redirects");
+                    }
+                    current = new URL(current, location);
+                    continue;
+                }
+                if (code != HttpURLConnection.HTTP_OK || c.getContentLengthLong() > MAX_ICON_BYTES) {
+                    throw new java.io.IOException("icon response rejected");
+                }
+                try (InputStream in = c.getInputStream()) {
+                    ByteArrayOutputStream out = new ByteArrayOutputStream(16384);
+                    byte[] buffer = new byte[8192];
+                    int read;
+                    int total = 0;
+                    while ((read = in.read(buffer)) != -1) {
+                        total += read;
+                        if (total > MAX_ICON_BYTES) {
+                            throw new java.io.IOException("icon too large");
+                        }
+                        out.write(buffer, 0, read);
+                    }
+                    return out.toByteArray();
+                }
+            } finally {
+                if (c != null) {
+                    c.disconnect();
+                }
+            }
+        }
+        throw new java.io.IOException("too many redirects");
+    }
+
+    private static Bitmap decodeIcon(byte[] data) {
+        if (data == null || data.length == 0 || data.length > MAX_ICON_BYTES) {
+            return null;
+        }
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeByteArray(data, 0, data.length, bounds);
+        int width = bounds.outWidth;
+        int height = bounds.outHeight;
+        if (width <= 0 || height <= 0 || width > 32768 || height > 32768
+                || (long) width * height > 100_000_000L) {
+            return null;
+        }
+        int sample = 1;
+        while (width / sample > MAX_ICON_SIDE || height / sample > MAX_ICON_SIDE) {
+            sample <<= 1;
+        }
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = sample;
+        return BitmapFactory.decodeByteArray(data, 0, data.length, options);
+    }
+
     public static Bitmap cachedIcon(String url) {
         return url == null ? null : ICONS.get(url);
     }
 
     public static void icon(final String url, final Callback<Bitmap> callback) {
-        if (url == null || url.isEmpty() || !url.startsWith("https://")) {
+        if (url == null || url.isEmpty() || url.length() > 4096) {
+            callback.onResult(null, "no icon");
+            return;
+        }
+        try {
+            if (!allowedIconHost(new URL(url))) {
+                callback.onResult(null, "no icon");
+                return;
+            }
+        } catch (Exception e) {
             callback.onResult(null, "no icon");
             return;
         }
         Bitmap cached = ICONS.get(url);
-        if (cached != null) {
+        if (cached != null && !cached.isRecycled()) {
             callback.onResult(cached, null);
             return;
         }
         EXECUTOR.execute(() -> {
             Bitmap bitmap = null;
             try {
-                byte[] data = download(url);
-                bitmap = BitmapFactory.decodeByteArray(data, 0, data.length);
+                byte[] data = downloadIcon(url);
+                bitmap = decodeIcon(data);
                 if (bitmap != null) {
                     ICONS.put(url, bitmap);
                 }

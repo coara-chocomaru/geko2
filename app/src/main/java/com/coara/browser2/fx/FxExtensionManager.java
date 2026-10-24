@@ -23,6 +23,7 @@ import org.mozilla.geckoview.WebExtensionController;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.net.URI;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -555,7 +556,7 @@ public final class FxExtensionManager {
         }
         if (wantsTechnical) {
             dataBox.setText("技術情報と操作データの収集を許可する");
-            dataBox.setChecked(true);
+            dataBox.setChecked(false);
             box.addView(dataBox);
         }
         ScrollView scroll = new ScrollView(a);
@@ -669,7 +670,58 @@ public final class FxExtensionManager {
         }
     }
 
+    static String validateInstallSource(String raw, String method, File stagingDirectory) {
+        if (raw == null || raw.isEmpty() || raw.length() > 8192 || !raw.equals(raw.trim())) {
+            return "拡張機能のURLまたはファイル指定が不正です";
+        }
+        if (WebExtensionController.INSTALLATION_METHOD_FROM_FILE.equals(method)) {
+            if (stagingDirectory == null) {
+                return "ローカル拡張機能の保管先を確認できません";
+            }
+            try {
+                URI uri = new URI(raw);
+                if (!"file".equalsIgnoreCase(uri.getScheme()) || (uri.getAuthority() != null && !uri.getAuthority().isEmpty())) {
+                    return "ローカル拡張機能ファイルの指定が不正です";
+                }
+                File root = stagingDirectory.getCanonicalFile();
+                File file = new File(uri).getCanonicalFile();
+                String prefix = root.getPath() + File.separator;
+                if (!file.getPath().startsWith(prefix) || !file.isFile() || file.length() < 4
+                        || file.length() > MAX_PACKAGE_BYTES || !looksLikeZip(file)) {
+                    return "保管場所または形式が不正な拡張機能ファイルです";
+                }
+                return null;
+            } catch (Exception e) {
+                return "ローカル拡張機能ファイルの指定が不正です";
+            }
+        }
+        if (!WebExtensionController.INSTALLATION_METHOD_MANAGER.equals(method)) {
+            return "対応していない拡張機能のインストール方法です";
+        }
+        try {
+            URI uri = new URI(raw);
+            String scheme = uri.getScheme();
+            String host = uri.getHost();
+            if (!"https".equalsIgnoreCase(scheme) || host == null || host.isEmpty()
+                    || uri.getUserInfo() != null || uri.getPort() == 0 || uri.getPort() > 65535) {
+                return "拡張機能のダウンロードには認証情報を含まないHTTPS URLが必要です";
+            }
+            return null;
+        } catch (Exception e) {
+            return "拡張機能のURLが不正です";
+        }
+    }
+
     public void installFromUrl(String url, String method, final InstallCallback callback) {
+        File stagingDirectory = null;
+        if (WebExtensionController.INSTALLATION_METHOD_FROM_FILE.equals(method) && BrowserEngine.isInitialized()) {
+            stagingDirectory = new File(BrowserEngine.get().getContext().getCacheDir(), STAGING_DIR);
+        }
+        String validationError = validateInstallSource(url, method, stagingDirectory);
+        if (validationError != null) {
+            deliver(callback, null, validationError);
+            return;
+        }
         start();
         WebExtensionController c = controller();
         if (c == null) {
@@ -779,11 +831,21 @@ public final class FxExtensionManager {
     }
 
     public static boolean isExtensionPackage(String url, String mimeType) {
+        if (url == null || url.isEmpty() || url.length() > 8192 || !url.equals(url.trim())) {
+            return false;
+        }
+        try {
+            URI uri = new URI(url);
+            if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null
+                    || uri.getHost().isEmpty() || uri.getUserInfo() != null
+                    || uri.getPort() == 0 || uri.getPort() > 65535) {
+                return false;
+            }
+        } catch (Exception e) {
+            return false;
+        }
         if (mimeType != null && mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("application/x-xpinstall")) {
             return true;
-        }
-        if (url == null) {
-            return false;
         }
         String u = url;
         int q = u.indexOf('?');
@@ -794,7 +856,7 @@ public final class FxExtensionManager {
         if (h >= 0) {
             u = u.substring(0, h);
         }
-        return (u.startsWith("https://") || u.startsWith("http://")) && u.toLowerCase(java.util.Locale.ROOT).endsWith(".xpi");
+        return u.toLowerCase(java.util.Locale.ROOT).endsWith(".xpi");
     }
 
     public boolean offerInstall(final Activity activity, final String url, String mimeType, final Runnable downloadInstead) {

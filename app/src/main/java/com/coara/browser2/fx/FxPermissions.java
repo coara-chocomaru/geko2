@@ -33,6 +33,8 @@ public final class FxPermissions {
         LABELS.put("management", "拡張機能の管理");
         LABELS.put("menus", "メニューの追加");
         LABELS.put("nativeMessaging", "他のアプリとの通信");
+        LABELS.put("nativeMessagingFromContent", "ページ内コンテンツスクリプトからネイティブアプリとの通信");
+        LABELS.put("geckoViewAddons", "GeckoView本体との特権通信");
         LABELS.put("notifications", "通知の表示");
         LABELS.put("pageCapture", "ページの保存");
         LABELS.put("privacy", "プライバシー設定の読み取りと変更");
@@ -60,6 +62,8 @@ public final class FxPermissions {
         LABELS.put("*://*/*", "すべてのサイトのデータへのアクセス");
         LABELS.put("http://*/*", "すべてのHTTPサイトのデータへのアクセス");
         LABELS.put("https://*/*", "すべてのHTTPSサイトのデータへのアクセス");
+        LABELS.put("file://*/*", "端末内ファイルの読み取りと変更");
+        LABELS.put("ftp://*/*", "すべてのFTPサイトのデータへのアクセス");
     }
 
     private FxPermissions() {
@@ -148,7 +152,8 @@ public final class FxPermissions {
                 continue;
             }
             for (String p : list) {
-                if (p.equals("<all_urls>") || p.equals("*://*/*") || p.equals("http://*/*") || p.equals("https://*/*")) {
+                if (p.equals("<all_urls>") || p.equals("*://*/*") || p.equals("http://*/*")
+                        || p.equals("https://*/*") || p.equals("file://*/*") || p.equals("ftp://*/*")) {
                     return true;
                 }
             }
