@@ -115,7 +115,7 @@ dependencies {
     implementation 'androidx.recyclerview:recyclerview:1.4.0'
     implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.2.0'
     implementation 'androidx.cardview:cardview:1.0.0'
-    implementation 'org.mozilla.geckoview:geckoview:158.0.20261021001945'
+    implementation 'org.mozilla.geckoview:geckoview-nightly:160.0.20261022084508'
     implementation 'com.google.mlkit:translate:17.0.3'
     implementation 'com.google.mlkit:language-id:17.0.6'
     implementation 'androidx.activity:activity:1.13.0'
