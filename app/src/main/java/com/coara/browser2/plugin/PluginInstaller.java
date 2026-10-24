@@ -37,39 +37,157 @@ public final class PluginInstaller {
     }
 
     public static final class HttpFetcher implements Fetcher {
+        private static final int MAX_URL_CHARS = 8192;
+        private static final int MAX_REDIRECTS = 5;
+
         @Override
         public byte[] fetch(String url, int maxBytes) throws IOException {
-            String lower = url.toLowerCase(Locale.US);
-            if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
-                throw new IOException("unsupported scheme");
+            if (url == null || url.isEmpty() || url.length() > MAX_URL_CHARS || maxBytes < 1) {
+                throw new IOException("invalid request");
             }
-            HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-            try {
-                c.setConnectTimeout(8000);
-                c.setReadTimeout(15000);
-                c.setInstanceFollowRedirects(true);
-                c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10) CoaraBrowser");
-                int code = c.getResponseCode();
-                if (code < 200 || code >= 300) {
-                    throw new IOException("HTTP " + code);
-                }
-                try (InputStream in = c.getInputStream()) {
-                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                    byte[] buf = new byte[8192];
-                    int n;
-                    long total = 0L;
-                    while ((n = in.read(buf)) > 0) {
-                        total += n;
-                        if (total > maxBytes) {
-                            throw new IOException("too large");
+            URL current = new URL(url);
+            validateRemoteUrl(current);
+            for (int redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
+                HttpURLConnection c = (HttpURLConnection) current.openConnection();
+                try {
+                    c.setConnectTimeout(8000);
+                    c.setReadTimeout(15000);
+                    c.setInstanceFollowRedirects(false);
+                    c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10) CoaraBrowser");
+                    int code = c.getResponseCode();
+                    if (code == HttpURLConnection.HTTP_MOVED_PERM
+                            || code == HttpURLConnection.HTTP_MOVED_TEMP
+                            || code == HttpURLConnection.HTTP_SEE_OTHER
+                            || code == 307 || code == 308) {
+                        if (redirect == MAX_REDIRECTS) {
+                            throw new IOException("too many redirects");
                         }
-                        bos.write(buf, 0, n);
+                        String location = c.getHeaderField("Location");
+                        if (location == null || location.trim().isEmpty() || location.length() > MAX_URL_CHARS) {
+                            throw new IOException("invalid redirect");
+                        }
+                        URL next = new URL(current, location.trim());
+                        if (next.toExternalForm().length() > MAX_URL_CHARS) {
+                            throw new IOException("redirect URL too long");
+                        }
+                        validateRemoteUrl(next);
+                        if ("https".equalsIgnoreCase(current.getProtocol())
+                                && "http".equalsIgnoreCase(next.getProtocol())) {
+                            throw new IOException("HTTPS downgrade blocked");
+                        }
+                        current = next;
+                        continue;
                     }
-                    return bos.toByteArray();
+                    if (code < 200 || code >= 300) {
+                        throw new IOException("HTTP " + code);
+                    }
+                    long declared = c.getContentLengthLong();
+                    if (declared > maxBytes) {
+                        throw new IOException("too large");
+                    }
+                    try (InputStream in = c.getInputStream()) {
+                        ByteArrayOutputStream bos = new ByteArrayOutputStream(Math.min(maxBytes, 16384));
+                        byte[] buf = new byte[8192];
+                        int n;
+                        long total = 0L;
+                        while ((n = in.read(buf)) > 0) {
+                            total += n;
+                            if (total > maxBytes) {
+                                throw new IOException("too large");
+                            }
+                            bos.write(buf, 0, n);
+                        }
+                        return bos.toByteArray();
+                    }
+                } finally {
+                    c.disconnect();
                 }
-            } finally {
-                c.disconnect();
             }
+            throw new IOException("too many redirects");
+        }
+
+        private static void validateRemoteUrl(URL url) throws IOException {
+            String scheme = url.getProtocol();
+            String host = url.getHost();
+            int port = url.getPort();
+            if (host == null || host.isEmpty() || url.getUserInfo() != null
+                    || port == 0 || port > 65535
+                    || !("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))) {
+                throw new IOException("unsupported URL");
+            }
+            String normalizedHost = host.toLowerCase(Locale.US);
+            while (normalizedHost.endsWith(".")) {
+                normalizedHost = normalizedHost.substring(0, normalizedHost.length() - 1);
+            }
+            if (normalizedHost.startsWith("[") && normalizedHost.endsWith("]")) {
+                normalizedHost = normalizedHost.substring(1, normalizedHost.length() - 1);
+            }
+            if (normalizedHost.equals("localhost") || normalizedHost.endsWith(".localhost")
+                    || normalizedHost.endsWith(".local") || normalizedHost.endsWith(".internal")
+                    || normalizedHost.endsWith(".lan") || normalizedHost.endsWith(".home.arpa")) {
+                throw new IOException("local host blocked");
+            }
+            try {
+                java.net.InetAddress[] addresses = java.net.InetAddress.getAllByName(normalizedHost);
+                if (addresses.length == 0) {
+                    throw new IOException("host resolution failed");
+                }
+                for (java.net.InetAddress address : addresses) {
+                    if (isRestrictedAddress(address)) {
+                        throw new IOException("local host blocked");
+                    }
+                }
+            } catch (java.net.UnknownHostException e) {
+                throw new IOException("host resolution failed", e);
+            }
+        }
+
+        private static boolean isRestrictedAddress(java.net.InetAddress address) {
+            if (address.isAnyLocalAddress() || address.isLoopbackAddress() || address.isLinkLocalAddress()
+                    || address.isSiteLocalAddress() || address.isMulticastAddress()) {
+                return true;
+            }
+            byte[] raw = address.getAddress();
+            if (raw.length == 4) {
+                int a = raw[0] & 255;
+                int b = raw[1] & 255;
+                int c = raw[2] & 255;
+                return a == 0 || a == 10 || a == 127 || a >= 224
+                        || a == 169 && b == 254
+                        || a == 172 && b >= 16 && b <= 31
+                        || a == 192 && (b == 0 || b == 168 || b == 88 && c == 99 || b == 0 && c == 2)
+                        || a == 100 && b >= 64 && b <= 127
+                        || a == 198 && (b == 18 || b == 19 || b == 51 && c == 100)
+                        || a == 203 && b == 0 && c == 113;
+            }
+            if (raw.length == 16) {
+                if ((raw[0] & 0xFE) == 0xFC || (raw[0] & 255) == 0xFF
+                        || (raw[0] & 255) == 0xFE && (raw[1] & 0xC0) == 0x80) {
+                    return true;
+                }
+                boolean mapped = true;
+                for (int i = 0; i < 10; i++) {
+                    if (raw[i] != 0) {
+                        mapped = false;
+                        break;
+                    }
+                }
+                if (mapped && raw[10] == (byte) 255 && raw[11] == (byte) 255) {
+                    long ipv4 = ((raw[12] & 255L) << 24) | ((raw[13] & 255L) << 16)
+                            | ((raw[14] & 255L) << 8) | (raw[15] & 255L);
+                    int a = (int) ((ipv4 >>> 24) & 255);
+                    int b = (int) ((ipv4 >>> 16) & 255);
+                    int c = (int) ((ipv4 >>> 8) & 255);
+                    return a == 0 || a == 10 || a == 127 || a >= 224
+                            || a == 169 && b == 254
+                            || a == 172 && b >= 16 && b <= 31
+                            || a == 192 && (b == 0 || b == 168 || b == 88 && c == 99 || b == 0 && c == 2)
+                            || a == 100 && b >= 64 && b <= 127
+                            || a == 198 && (b == 18 || b == 19 || b == 51 && c == 100)
+                            || a == 203 && b == 0 && c == 113;
+                }
+            }
+            return false;
         }
     }
 
@@ -344,6 +462,9 @@ public final class PluginInstaller {
                 if (data == null) {
                     continue;
                 }
+                warnings.add((u.regionMatches(true, 0, "http://", 0, 7)
+                        ? "危険: HTTP経由で@requireコードを取得しました。通信内容が改ざんされる可能性があります: "
+                        : "外部@requireコードをインストール時に取得し、ページ内で実行します: ") + u);
                 fetched++;
                 counter++;
                 stored = uniquePath(files, "lib/req_" + counter + "_" + sanitizeSegment(baseOf(u)));
@@ -378,6 +499,9 @@ public final class PluginInstaller {
                 if (data == null) {
                     continue;
                 }
+                warnings.add((u.regionMatches(true, 0, "http://", 0, 7)
+                        ? "危険: HTTP経由で@resourceデータを取得しました。通信内容が改ざんされる可能性があります: "
+                        : "外部@resourceデータをインストール時に取得しました: ") + u);
                 resCount++;
                 stored = uniquePath(files, "res/" + resCount + "_" + sanitizeSegment(baseOf(u)));
                 files.put(stored, data);

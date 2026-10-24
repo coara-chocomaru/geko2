@@ -21,6 +21,9 @@ import java.util.Map;
 
 final class PluginHttp {
     static final int MAX_BODY = 8 * 1024 * 1024;
+    static final int MAX_REQUEST_BODY = 2 * 1024 * 1024;
+    static final int MAX_REQUEST_JSON_CHARS = 3_000_000;
+    private static final int MAX_RESPONSE_HEADERS = 64 * 1024;
     private static final int MAX_REDIRECTS = 8;
     private static final int DEFAULT_TIMEOUT = 30000;
     private static final int MAX_TIMEOUT = 120000;
@@ -187,10 +190,9 @@ final class PluginHttp {
             host = host.substring(0, host.length() - 1);
         }
         boolean secure = "https".equalsIgnoreCase(scheme);
-        String origin = originHost == null ? "" : originHost.toLowerCase(Locale.US);
         boolean priv = isPrivateHost(host);
-        if (host.equals(origin)) {
-            return true;
+        if (originHost != null && !originHost.isEmpty() && sameOrigin(originHost, url)) {
+            return priv || !resolvesToPrivate(host);
         }
         if (connects != null) {
             for (String c : connects) {
@@ -205,7 +207,7 @@ final class PluginHttp {
                     continue;
                 }
                 if (host.equals(e)) {
-                    return true;
+                    return priv || !resolvesToPrivate(host);
                 }
                 if (!priv && host.endsWith("." + e) && (secure || !isIpLiteral(host)) && !resolvesToPrivate(host)) {
                     return true;
@@ -225,10 +227,13 @@ final class PluginHttp {
         return o;
     }
 
-    static JSONObject execute(JSONObject opts, List<String> connects, Call call) {
+    static JSONObject execute(JSONObject opts, List<String> connects, Call call, String trustedOrigin) {
         try {
             String url = opts.optString("url", "");
-            String origin = opts.optString("origin", "");
+            if (url.length() > 8192) {
+                return errorPayload("url too long");
+            }
+            String origin = trustedOrigin == null || trustedOrigin.length() > 8192 ? "" : trustedOrigin;
             String method = opts.optString("method", "GET").toUpperCase(Locale.US);
             if (!method.matches("[A-Z]{3,10}")) {
                 return errorPayload("invalid method");
@@ -245,13 +250,37 @@ final class PluginHttp {
             JSONObject headers = opts.optJSONObject("headers");
             byte[] body = null;
             if (opts.has("dataB64")) {
-                body = Base64.decode(opts.optString("dataB64", ""), Base64.DEFAULT);
+                String encoded = opts.optString("dataB64", "");
+                if (encoded.length() > ((MAX_REQUEST_BODY + 2L) / 3L) * 4L + 16L) {
+                    return errorPayload("request body too large");
+                }
+                try {
+                    body = Base64.decode(encoded, Base64.DEFAULT);
+                } catch (IllegalArgumentException e) {
+                    return errorPayload("invalid request body");
+                }
             } else if (opts.has("data") && !opts.isNull("data")) {
-                body = opts.optString("data", "").getBytes(StandardCharsets.UTF_8);
+                String text = opts.optString("data", "");
+                if (text.length() > MAX_REQUEST_BODY) {
+                    return errorPayload("request body too large");
+                }
+                body = text.getBytes(StandardCharsets.UTF_8);
+            }
+            if (body != null && body.length > MAX_REQUEST_BODY) {
+                return errorPayload("request body too large");
+            }
+            if (headers != null && !validHeaders(headers)) {
+                return errorPayload("invalid headers");
             }
             String responseType = opts.optString("responseType", "");
             String user = opts.optString("user", "");
             String password = opts.optString("password", "");
+            String userAgent = opts.optString("ua", "Mozilla/5.0 (Linux; Android 10) CoaraBrowser");
+            String charsetOverride = opts.optString("charset", "");
+            if (responseType.length() > 64 || user.length() > 4096 || password.length() > 4096
+                    || userAgent.length() > 8192 || charsetOverride.length() > 128) {
+                return errorPayload("request metadata too large");
+            }
 
             String current = url;
             int redirects = 0;
@@ -276,8 +305,10 @@ final class PluginHttp {
                         while (it.hasNext()) {
                             String k = it.next();
                             String kl = k.toLowerCase(Locale.US);
+                            boolean sameOriginalOrigin = sameOrigin(url, current);
                             if (kl.equals("host") || kl.equals("content-length") || kl.equals("connection")
-                                    || kl.equals("transfer-encoding")) {
+                                    || kl.equals("transfer-encoding") || kl.equals("proxy-authorization")
+                                    || (!sameOriginalOrigin && (kl.equals("authorization") || kl.equals("cookie")))) {
                                 continue;
                             }
                             if (kl.equals("cookie")) {
@@ -290,23 +321,25 @@ final class PluginHttp {
                         }
                     }
                     if (!hasUa) {
-                        c.setRequestProperty("User-Agent", opts.optString("ua", "Mozilla/5.0 (Linux; Android 10) CoaraBrowser"));
+                        c.setRequestProperty("User-Agent", userAgent);
                     }
                     if (!anonymous && !hasCookie) {
                         String cookie = CookieSitePolicy.cookieFor(current);
-                        if (cookie != null && !cookie.isEmpty()) {
+                        if (cookie != null && !cookie.isEmpty() && cookie.length() <= 65536) {
                             c.setRequestProperty("Cookie", cookie);
                         }
                     }
-                    if (!user.isEmpty()) {
+                    if (!user.isEmpty() && sameOrigin(url, current)) {
                         String cred = Base64.encodeToString((user + ":" + password).getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
                         c.setRequestProperty("Authorization", "Basic " + cred);
                     }
                     if (body != null && body.length > 0 && !method.equals("GET") && !method.equals("HEAD")) {
                         c.setDoOutput(true);
                         c.setFixedLengthStreamingMode(body.length);
-                        c.getOutputStream().write(body);
-                        c.getOutputStream().flush();
+                        try (java.io.OutputStream output = c.getOutputStream()) {
+                            output.write(body);
+                            output.flush();
+                        }
                     }
                     int code = c.getResponseCode();
                     if (!anonymous && !CookieSitePolicy.isBlockAllActive()) {
@@ -334,6 +367,11 @@ final class PluginHttp {
                             continue;
                         }
                     }
+                    long contentLength = c.getContentLengthLong();
+                    if (contentLength > MAX_BODY) {
+                        return errorPayload("response too large");
+                    }
+                    String responseHeaders = headerString(c);
                     InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
                     byte[] data = new byte[0];
                     if (in != null && !method.equals("HEAD")) {
@@ -359,7 +397,7 @@ final class PluginHttp {
                     out.put("status", code);
                     out.put("statusText", c.getResponseMessage() == null ? "" : c.getResponseMessage());
                     out.put("finalUrl", current);
-                    out.put("headers", headerString(c));
+                    out.put("headers", responseHeaders);
                     String ctype = c.getContentType();
                     if (responseType.equals("arraybuffer") || responseType.equals("blob") || opts.optBoolean("binary", false)) {
                         out.put("b64", Base64.encodeToString(data, Base64.NO_WRAP));
@@ -381,6 +419,43 @@ final class PluginHttp {
             }
             return errorPayload(t.getClass().getSimpleName() + ": " + t.getMessage());
         }
+    }
+
+    private static boolean sameOrigin(String first, String second) {
+        try {
+            URL a = new URL(first);
+            URL b = new URL(second);
+            int ap = a.getPort() < 0 ? a.getDefaultPort() : a.getPort();
+            int bp = b.getPort() < 0 ? b.getDefaultPort() : b.getPort();
+            return a.getProtocol().equalsIgnoreCase(b.getProtocol())
+                    && a.getHost().equalsIgnoreCase(b.getHost()) && ap == bp
+                    && a.getUserInfo() == null && b.getUserInfo() == null;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static boolean validHeaders(JSONObject headers) {
+        if (headers.length() > 64) {
+            return false;
+        }
+        Iterator<String> it = headers.keys();
+        int total = 0;
+        while (it.hasNext()) {
+            String key = it.next();
+            String value = headers.optString(key, "");
+            if (key == null || key.isEmpty() || key.length() > 256 || value.length() > 8192
+                    || key.indexOf('\r') >= 0 || key.indexOf('\n') >= 0
+                    || value.indexOf('\r') >= 0 || value.indexOf('\n') >= 0
+                    || !key.matches("[!#$%&'*+.^_`|~0-9A-Za-z-]+")) {
+                return false;
+            }
+            total += key.length() + value.length();
+            if (total > 32768) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static JSONObject abortedPayload() {
@@ -407,11 +482,29 @@ final class PluginHttp {
             return "";
         }
         for (Map.Entry<String, List<String>> e : hf.entrySet()) {
-            if (e.getKey() == null) {
+            if (e.getKey() == null || e.getKey().equalsIgnoreCase("Set-Cookie")
+                    || e.getKey().equalsIgnoreCase("Set-Cookie2")) {
                 continue;
             }
             for (String v : e.getValue()) {
-                sb.append(e.getKey()).append(": ").append(v).append("\r\n");
+                if (sb.length() >= MAX_RESPONSE_HEADERS) {
+                    return sb.toString();
+                }
+                int remaining = MAX_RESPONSE_HEADERS - sb.length();
+                String prefix = e.getKey() + ": ";
+                int prefixLength = Math.min(prefix.length(), remaining);
+                sb.append(prefix, 0, prefixLength);
+                remaining -= prefixLength;
+                String value = v == null ? "" : v;
+                int valueLength = Math.min(value.length(), remaining);
+                sb.append(value, 0, valueLength);
+                remaining -= valueLength;
+                if (remaining > 0) {
+                    sb.append('\r');
+                }
+                if (remaining > 1) {
+                    sb.append('\n');
+                }
             }
         }
         return sb.toString();

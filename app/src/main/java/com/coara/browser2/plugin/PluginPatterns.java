@@ -14,8 +14,201 @@ public final class PluginPatterns {
     public static final List<String> NO_MATCH_LIST = java.util.Collections.singletonList(NO_MATCH);
     private static final String NO_MATCH_ORIGIN = "https://no-match.invalid";
 
+    private static boolean isSafeRawRegex(String regex) {
+        if (regex == null || regex.length() > 2048 || hasBackReference(regex)) {
+            return false;
+        }
+        return !hasDangerousQuantifiedGroup(regex);
+    }
+
+    private static boolean hasBackReference(String regex) {
+        boolean escaped = false;
+        boolean inClass = false;
+        for (int i = 0; i < regex.length(); i++) {
+            char c = regex.charAt(i);
+            if (escaped) {
+                if (!inClass && ((c >= '1' && c <= '9') || c == 'k' || c == 'g')) {
+                    return true;
+                }
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+            } else if (inClass) {
+                if (c == ']') {
+                    inClass = false;
+                }
+            } else if (c == '[') {
+                inClass = true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasDangerousQuantifiedGroup(String regex) {
+        boolean escaped = false;
+        boolean inClass = false;
+        for (int i = 0; i < regex.length(); i++) {
+            char c = regex.charAt(i);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (inClass) {
+                if (c == ']') {
+                    inClass = false;
+                }
+                continue;
+            }
+            if (c == '[') {
+                inClass = true;
+                continue;
+            }
+            if (c != '(') {
+                continue;
+            }
+            int close = matchingGroupEnd(regex, i);
+            if (close < 0) {
+                return false;
+            }
+            String inner = regex.substring(i + 1, close);
+            int repeatEnd = repeatQuantifierEnd(regex, close + 1);
+            if (repeatEnd > close + 1 && (hasRepeatQuantifier(inner) || hasAlternation(inner))) {
+                return true;
+            }
+            if (hasDangerousQuantifiedGroup(inner)) {
+                return true;
+            }
+            i = close;
+        }
+        return false;
+    }
+
+    private static int matchingGroupEnd(String regex, int start) {
+        int depth = 0;
+        boolean escaped = false;
+        boolean inClass = false;
+        for (int i = start; i < regex.length(); i++) {
+            char c = regex.charAt(i);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (inClass) {
+                if (c == ']') {
+                    inClass = false;
+                }
+                continue;
+            }
+            if (c == '[') {
+                inClass = true;
+            } else if (c == '(') {
+                depth++;
+            } else if (c == ')' && --depth == 0) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static boolean hasRepeatQuantifier(String regex) {
+        boolean escaped = false;
+        boolean inClass = false;
+        for (int i = 0; i < regex.length(); i++) {
+            char c = regex.charAt(i);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (inClass) {
+                if (c == ']') {
+                    inClass = false;
+                }
+                continue;
+            }
+            if (c == '[') {
+                inClass = true;
+                continue;
+            }
+            if (c == '*' || c == '+') {
+                return true;
+            }
+            if (c == '{' && repeatQuantifierEnd(regex, i) > i) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasAlternation(String regex) {
+        boolean escaped = false;
+        boolean inClass = false;
+        for (int i = 0; i < regex.length(); i++) {
+            char c = regex.charAt(i);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (inClass) {
+                if (c == ']') {
+                    inClass = false;
+                }
+                continue;
+            }
+            if (c == '[') {
+                inClass = true;
+            } else if (c == '|') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int repeatQuantifierEnd(String regex, int start) {
+        if (start < 0 || start >= regex.length()) {
+            return start;
+        }
+        char c = regex.charAt(start);
+        if (c == '*' || c == '+') {
+            return start + 1;
+        }
+        if (c != '{') {
+            return start;
+        }
+        int end = regex.indexOf('}', start + 1);
+        if (end < 0 || end - start > 20) {
+            return start;
+        }
+        String body = regex.substring(start + 1, end);
+        if (!body.matches("\\d+(?:,\\d*)?")) {
+            return start;
+        }
+        if (body.equals("0,1")) {
+            return start;
+        }
+        return end + 1;
+    }
+
     private static final Map<String, Pattern> PATTERN_CACHE = new ConcurrentHashMap<>();
     private static final String SPECIALS = "\\.[]{}()+^$|";
+    private static final int MAX_PATTERN_URL_LENGTH = 8192;
 
     static {
         List<String> d = new ArrayList<>();
@@ -68,6 +261,9 @@ public final class PluginPatterns {
         }
         if (p.length() > 2 && p.startsWith("/") && p.endsWith("/")) {
             String inner = p.substring(1, p.length() - 1);
+            if (!isSafeRawRegex(inner)) {
+                return null;
+            }
             try {
                 Pattern.compile(inner);
             } catch (Exception e) {
@@ -218,7 +414,7 @@ public final class PluginPatterns {
     }
 
     public static boolean matchesAny(List<String> regexes, String url) {
-        if (url == null || regexes == null || regexes.isEmpty()) {
+        if (url == null || url.length() > MAX_PATTERN_URL_LENGTH || regexes == null || regexes.isEmpty()) {
             return false;
         }
         for (String r : regexes) {

@@ -77,6 +77,7 @@ public final class PluginRuntime {
         long navigationStartedAt = 0L;
         long navigationGeneration = 0L;
         final Map<String, String[]> commands = new LinkedHashMap<>();
+        final Map<String, WebExtension.Port> commandPorts = new HashMap<>();
         ViewOpsImpl ops;
     }
 
@@ -268,7 +269,7 @@ public final class PluginRuntime {
                     spec.put("id", info.id + "#" + i);
                     spec.put("matches", geckoMatches(entry));
                     spec.put("allFrames", entry.allFrames);
-                    spec.put("code", buildWrapper(manager, info, snap, js));
+                    spec.put("code", buildWrapper(manager, info, snap, js, i));
                     list.put(spec);
                 }
             }
@@ -297,16 +298,21 @@ public final class PluginRuntime {
         return out;
     }
 
-    private static String buildWrapper(PluginManager manager, PluginInfo info, JSONObject snap, String entryScript) {
+    private static String buildWrapper(PluginManager manager, PluginInfo info, JSONObject snap, String entryScript, int index) {
         String host = loadHost(manager.context());
+        String bridgeName = bridgeName(manager, info, index);
         StringBuilder sb = new StringBuilder(host.length() + entryScript.length() + 512);
         sb.append(host).append("\n;window.__coaraPlg.run(")
                 .append(JSONObject.quote(info.id)).append(',')
                 .append(JSONObject.quote(manager.getToken())).append(',')
-                .append(JSONObject.quote(PluginManager.BRIDGE_NAME)).append(',')
+                .append(JSONObject.quote(bridgeName)).append(',')
                 .append(snap.toString()).append(',')
                 .append(JSONObject.quote(entryScript)).append(");");
         return sb.toString();
+    }
+
+    private static String bridgeName(PluginManager manager, PluginInfo info, int index) {
+        return PluginManager.BRIDGE_NAME + "_" + manager.keyFor(info.id + "#" + index);
     }
 
     private static void handleMessage(final BrowserView view, final WebExtension.Port port, JSONObject m) {
@@ -323,8 +329,20 @@ public final class PluginRuntime {
             final String id = m.optString("id");
             final String op = m.optString("op");
             final String a = m.optString("a");
+            final String trustedOrigin = m.optString("originUrl", "");
             String result = manager.invoke(state == null ? null : state.ops, m.optString("tk"), id, op, a,
-                    m.optString("b"), m.optString("c"));
+                    m.optString("b"), m.optString("c"), trustedOrigin);
+            if (state != null && "1".equals(result) && "cmd".equals(op) && a.length() <= 128) {
+                synchronized (state.commands) {
+                    if (state.commands.containsKey(a)) {
+                        state.commandPorts.put(a, port);
+                    }
+                }
+            } else if (state != null && "uncmd".equals(op)) {
+                synchronized (state.commands) {
+                    state.commandPorts.remove(a);
+                }
+            }
             if ("sset".equals(op) || "sdel".equals(op) || "sclear".equals(op)) {
                 scheduleRepush();
             } else if ("xhr".equals(op)) {
@@ -389,14 +407,29 @@ public final class PluginRuntime {
     }
 
     public static void runCommand(BrowserView view, String commandId) {
-        if (view == null || commandId == null) {
+        if (view == null || commandId == null || commandId.isEmpty()) {
             return;
         }
-        String q = JSONObject.quote(commandId);
-        String js = "(function(i){try{var w=window.wrappedJSObject||window;var c=w.__coaraPlgCmd;var k=i.split(':')[0];if(c&&c[k])c[k](i);}catch(e){}})(" + q + ");";
+        ViewState state = stateOf(view);
+        if (state == null) {
+            return;
+        }
+        WebExtension.Port port;
+        synchronized (state.commands) {
+            if (!state.commands.containsKey(commandId)) {
+                return;
+            }
+            port = state.commandPorts.get(commandId);
+        }
+        if (port == null) {
+            return;
+        }
         try {
-            view.evaluateJavascript(js, null);
+            port.postMessage(PageAgent.json("t", "cmd", "id", commandId));
         } catch (Throwable ignored) {
+            synchronized (state.commands) {
+                state.commandPorts.remove(commandId);
+            }
         }
     }
 
@@ -441,6 +474,7 @@ public final class PluginRuntime {
         state.activeIds.clear();
         synchronized (state.commands) {
             state.commands.clear();
+            state.commandPorts.clear();
         }
     }
 
@@ -576,12 +610,9 @@ public final class PluginRuntime {
             String head = template.substring(0, idx);
             String tail = template.substring(idx + "%BODY%".length());
             List<String[]> headValues = new ArrayList<>();
-            headValues.add(new String[]{"%BRIDGE%", PluginManager.BRIDGE_NAME});
-            headValues.add(new String[]{"%TOKEN%", manager.getToken()});
             headValues.add(new String[]{"%META%", meta.toString()});
             headValues.add(new String[]{"%CSS%", css.toString()});
             headValues.add(new String[]{"%KEY%", manager.keyFor(info.id + "#" + index)});
-            headValues.add(new String[]{"%PKEY%", manager.keyFor(info.id)});
             headValues.add(new String[]{"%PRELUDE%", prelude});
             List<String[]> tailValues = new ArrayList<>();
             tailValues.add(new String[]{"%ID%", info.id + "/" + index});
