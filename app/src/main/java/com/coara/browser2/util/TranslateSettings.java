@@ -17,7 +17,8 @@ public final class TranslateSettings {
     private static final String[][] LANGUAGES = {
             {"ja", "日本語"},
             {"en", "英語"},
-            {"zh", "中国語"},
+            {"zh-CN", "中国語（簡体字）"},
+            {"zh-TW", "中国語（繁体字）"},
             {"ko", "韓国語"},
             {"es", "スペイン語"},
             {"fr", "フランス語"},
@@ -26,17 +27,47 @@ public final class TranslateSettings {
             {"ru", "ロシア語"},
             {"it", "イタリア語"},
             {"ar", "アラビア語"},
-            {"hi", "ヒンディー語"},
-            {"th", "タイ語"},
-            {"vi", "ベトナム語"},
-            {"id", "インドネシア語"},
-            {"tr", "トルコ語"},
+            {"sq", "アルバニア語"},
+            {"az", "アゼルバイジャン語"},
+            {"bn", "ベンガル語"},
+            {"eu", "バスク語"},
+            {"bs", "ボスニア語"},
+            {"bg", "ブルガリア語"},
+            {"ca", "カタルーニャ語"},
+            {"hr", "クロアチア語"},
+            {"cs", "チェコ語"},
+            {"da", "デンマーク語"},
             {"nl", "オランダ語"},
+            {"et", "エストニア語"},
+            {"fi", "フィンランド語"},
+            {"gl", "ガリシア語"},
+            {"el", "ギリシャ語"},
+            {"gu", "グジャラート語"},
+            {"he", "ヘブライ語"},
+            {"hi", "ヒンディー語"},
+            {"hu", "ハンガリー語"},
+            {"is", "アイスランド語"},
+            {"id", "インドネシア語"},
+            {"kn", "カンナダ語"},
+            {"lv", "ラトビア語"},
+            {"lt", "リトアニア語"},
+            {"ms", "マレー語"},
+            {"ml", "マラヤーラム語"},
+            {"nb", "ノルウェー語（ブークモール）"},
+            {"fa", "ペルシア語"},
             {"pl", "ポーランド語"},
+            {"ro", "ルーマニア語"},
+            {"sr", "セルビア語"},
+            {"sk", "スロバキア語"},
+            {"sl", "スロベニア語"},
+            {"sv", "スウェーデン語"},
+            {"ta", "タミル語"},
+            {"te", "テルグ語"},
+            {"th", "タイ語"},
+            {"tr", "トルコ語"},
             {"uk", "ウクライナ語"},
-            {"sv", "スウェーデン語"}
+            {"vi", "ベトナム語"}
     };
-
     private TranslateSettings() {
     }
 
@@ -57,8 +88,9 @@ public final class TranslateSettings {
     }
 
     public static int indexOf(String tag) {
+        String normalized = "zh".equalsIgnoreCase(tag) ? "zh-CN" : tag;
         for (int i = 0; i < LANGUAGES.length; i++) {
-            if (LANGUAGES[i][0].equals(tag)) {
+            if (LANGUAGES[i][0].equals(normalized)) {
                 return i;
             }
         }
@@ -72,11 +104,17 @@ public final class TranslateSettings {
 
     public static String getTarget(Context context, boolean secret) {
         String value = prefs(context, secret).getString(KEY_TARGET, DEFAULT_TARGET);
+        if ("zh".equalsIgnoreCase(value)) {
+            value = "zh-CN";
+        }
         return indexOf(value) >= 0 ? value : DEFAULT_TARGET;
     }
 
     public static String getSource(Context context, boolean secret) {
         String value = prefs(context, secret).getString(KEY_SOURCE, AUTO);
+        if ("zh".equalsIgnoreCase(value)) {
+            value = "zh-CN";
+        }
         return AUTO.equals(value) || indexOf(value) >= 0 ? value : AUTO;
     }
 

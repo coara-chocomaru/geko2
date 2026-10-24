@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.WeakHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -45,12 +46,15 @@ public final class PageTranslator {
     private static final String ASSET_NAME = "page_translate.js";
     private static final int CHUNK_CHARS = 3000;
     private static final int CHUNK_SEGMENTS = 50;
+    private static final int MAX_LANGUAGE_ID_NODES = 160;
+    private static final int MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
     private static final long POLL_MS = 1000L;
     private static final long POLL_MAX_MS = 5000L;
     private static final long MODEL_HINT_DELAY_MS = 1500L;
     private static final String STATE_JS = "(function(){var s=window.__coaraTr;return s&&s.active?1:0;})()";
     private static final String POLL_JS = "(function(){var s=window.__coaraTr;return s?(s.dirty?1:0):-1;})()";
     private static final String RESTORE_JS = "(function(){var s=window.__coaraTr;if(s)s.restore();return 1;})()";
+    private static final String COMPACT_JS = "(function(){var s=window.__coaraTr;if(s&&s.compact)s.compact();return 1;})()";
 
     private static final Map<BrowserView, Session> SESSIONS = new WeakHashMap<>();
     private static final Map<String, Translator> TRANSLATORS = new HashMap<>();
@@ -63,12 +67,14 @@ public final class PageTranslator {
     }
 
     private static final class Chunk {
-        final int base;
+        final int[] indexes;
         final String[] texts;
+        final String source;
 
-        Chunk(int base, String[] texts) {
-            this.base = base;
+        Chunk(int[] indexes, String[] texts, String source) {
+            this.indexes = indexes;
             this.texts = texts;
+            this.source = source;
         }
     }
 
@@ -77,13 +83,14 @@ public final class PageTranslator {
         final boolean allowOnline;
         final boolean silent;
         final String target;
+        final boolean sourceFixed;
         final ArrayDeque<Chunk> mlQueue = new ArrayDeque<>();
         String source;
         boolean online;
         boolean started;
         boolean failed;
         boolean errorShown;
-        boolean mlReady;
+        final Set<String> readyModelKeys = new HashSet<>();
         boolean mlRunning;
         boolean polling;
         int pending;
@@ -96,7 +103,8 @@ public final class PageTranslator {
             this.online = allowOnline;
             this.silent = silent;
             this.target = target;
-            this.source = TranslateSettings.AUTO.equals(fixedSource) ? null : fixedSource;
+            this.sourceFixed = fixedSource != null && !TranslateSettings.AUTO.equals(fixedSource);
+            this.source = sourceFixed ? fixedSource : null;
         }
     }
 
@@ -114,22 +122,58 @@ public final class PageTranslator {
             toast(view, "このページは翻訳できません");
             return;
         }
-        ensureMlKit(view.getContext());
+        if (GeckoNativePageTranslator.isActive(view)) {
+            GeckoNativePageTranslator.restore(view, new GeckoNativePageTranslator.Callback() {
+                @Override
+                public void onSuccess() {
+                    toast(view, "元の表示に戻しました");
+                }
+
+                @Override
+                public void onFailure() {
+                    toast(view, "原文に戻せませんでした。ページを再読み込みしてお試しください");
+                }
+            });
+            return;
+        }
         toast(view, "翻訳を開始しています…");
         view.evaluateJavascript(STATE_JS, value -> {
             if ("1".equals(value)) {
                 restore(view);
-            } else if (value == null || "null".equals(value)) {
-                toast(view, "翻訳処理を開始できませんでした。ページを読み込んでから再度お試しください");
             } else {
-                start(view, allowOnline, false);
+                startNativeOrLegacy(view, allowOnline, false);
+            }
+        });
+    }
+
+    private static void startNativeOrLegacy(BrowserView view, boolean allowOnline, boolean silent) {
+        if (view == null || view.isDestroyed()) {
+            return;
+        }
+        Context context = view.getContext();
+        String target = TranslateSettings.getTarget(context, !allowOnline);
+        String source = TranslateSettings.getSource(context, !allowOnline);
+        GeckoNativePageTranslator.tryTranslate(view, source, target, new GeckoNativePageTranslator.Callback() {
+            @Override
+            public void onSuccess() {
+                if (!silent) {
+                    toast(view, "Firefox翻訳エンジンで翻訳を開始しました。初回は言語モデルをダウンロードします");
+                }
+            }
+
+            @Override
+            public void onFailure() {
+                ensureMlKit(context);
+                start(view, allowOnline, silent);
             }
         });
     }
 
     public static void onPageStarted(BrowserView view) {
         if (view != null) {
-            SESSIONS.remove(view);
+            Session session = SESSIONS.remove(view);
+            cancelSession(session);
+            GeckoNativePageTranslator.onPageStarted(view);
         }
     }
 
@@ -141,14 +185,50 @@ public final class PageTranslator {
         if (!TranslateSettings.isAutoTranslate(context, !allowOnline)) {
             return;
         }
-        if (!translatable(view.getUrl()) || SESSIONS.get(view) != null) {
+        if (!translatable(view.getUrl()) || SESSIONS.get(view) != null || GeckoNativePageTranslator.isActive(view)) {
             return;
         }
-        ensureMlKit(context);
-        start(view, allowOnline, true);
+        startNativeOrLegacy(view, allowOnline, true);
     }
 
     public static void release() {
+        if (!SESSIONS.isEmpty()) {
+            return;
+        }
+        releaseResources();
+    }
+
+    public static void releaseForViews(Iterable<BrowserView> views) {
+        if (views != null) {
+            for (BrowserView view : views) {
+                releaseForView(view);
+            }
+        }
+        if (SESSIONS.isEmpty()) {
+            releaseResources();
+        }
+    }
+
+    public static void releaseForView(BrowserView view) {
+        if (view == null) {
+            return;
+        }
+        GeckoNativePageTranslator.releaseForView(view);
+        Session session = SESSIONS.remove(view);
+        if (session != null) {
+            session.failed = true;
+            session.mlQueue.clear();
+            session.pending = 0;
+            try {
+                if (!view.isDestroyed()) {
+                    view.evaluateJavascript(RESTORE_JS, null);
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    private static void releaseResources() {
         for (Translator translator : TRANSLATORS.values()) {
             try {
                 translator.close();
@@ -167,7 +247,6 @@ public final class PageTranslator {
             netExecutor.shutdownNow();
             netExecutor = null;
         }
-        SESSIONS.clear();
     }
 
     private static void ensureMlKit(Context context) {
@@ -192,7 +271,7 @@ public final class PageTranslator {
     }
 
     private static void restore(BrowserView view) {
-        SESSIONS.remove(view);
+        cancelSession(SESSIONS.remove(view));
         try {
             view.evaluateJavascript(RESTORE_JS, null);
         } catch (Exception ignored) {
@@ -200,9 +279,18 @@ public final class PageTranslator {
         toast(view, "元の表示に戻しました");
     }
 
+    private static void cancelSession(Session session) {
+        if (session == null) {
+            return;
+        }
+        session.failed = true;
+        session.mlQueue.clear();
+        session.pending = 0;
+    }
+
     private static boolean alive(Session session) {
         BrowserView view = session.view.get();
-        return view != null && SESSIONS.get(view) == session;
+        return view != null && !session.failed && SESSIONS.get(view) == session;
     }
 
     private static void extract(Session session, boolean first) {
@@ -240,6 +328,8 @@ public final class PageTranslator {
             return;
         }
         JSONArray array = result.optJSONArray("texts");
+        JSONArray indexArray = result.optJSONArray("indexes");
+        JSONArray languageArray = result.optJSONArray("langs");
         int count = array == null ? 0 : array.length();
         if (count == 0) {
             if (first) {
@@ -252,19 +342,26 @@ public final class PageTranslator {
         }
         session.pollMs = POLL_MS;
         String[] texts = new String[count];
+        String[] languages = new String[count];
+        int[] indexes = new int[count];
+        int base = result.optInt("base", 0);
         for (int i = 0; i < count; i++) {
             texts[i] = array.optString(i);
+            languages[i] = languageArray == null ? "" : languageArray.optString(i, "");
+            indexes[i] = indexArray == null ? base + i : indexArray.optInt(i, base + i);
         }
-        int base = result.optInt("base", 0);
         String lang = result.optString("lang", "");
-        if (session.source != null && session.source.equals(primary(session.target))) {
+        if (session.sourceFixed && session.source != null
+                && session.source.equals(primary(session.target))) {
             abort(session, "翻訳元と翻訳先が同じ言語です");
             return;
         }
         if (session.source == null) {
-            detect(session, texts, lang, base);
+            detect(session, texts, lang, indexes, languages);
+        } else if (session.sourceFixed) {
+            dispatch(session, indexes, texts);
         } else {
-            dispatch(session, base, texts);
+            dispatchMixed(session, indexes, texts, languages, session.source);
         }
     }
 
@@ -284,7 +381,7 @@ public final class PageTranslator {
         }, 350L);
     }
 
-    private static void detect(Session session, String[] texts, String htmlLang, int base) {
+    private static void detect(Session session, String[] texts, String htmlLang, int[] indexes, String[] languages) {
         ArrayList<String> candidates = new ArrayList<>();
         Set<String> uniqueCandidates = new HashSet<>();
         for (String text : texts) {
@@ -311,126 +408,233 @@ public final class PageTranslator {
         if (sample.length() < 24) {
             for (String text : texts) {
                 if (text != null && !text.trim().isEmpty()) {
-                    sample.append(text.trim()).append(' ');
-                    if (sample.length() >= 1200) {
+                    int remaining = Math.max(0, 1200 - sample.length());
+                    if (remaining == 0) {
                         break;
                     }
+                    String clean = text.trim();
+                    sample.append(clean, 0, Math.min(clean.length(), remaining)).append(' ');
                 }
             }
         }
         final String detectionSample = sample.toString();
         try {
             identifier().identifyLanguage(detectionSample)
-                    .addOnSuccessListener(tag -> onInitialLanguageDetected(session, tag, candidates, htmlLang, base, texts))
-                    .addOnFailureListener(e -> onInitialLanguageDetected(session, "und", candidates, htmlLang, base, texts));
+                    .addOnSuccessListener(tag -> onInitialLanguageDetected(session, tag, htmlLang, indexes, texts, languages))
+                    .addOnFailureListener(e -> onInitialLanguageDetected(session, "und", htmlLang, indexes, texts, languages));
         } catch (Throwable t) {
-            onInitialLanguageDetected(session, "und", candidates, htmlLang, base, texts);
+            onInitialLanguageDetected(session, "und", htmlLang, indexes, texts, languages);
         }
     }
 
-    private static void onInitialLanguageDetected(Session session, String tag, ArrayList<String> candidates,
-                                                   String htmlLang, int base, String[] texts) {
+    private static void onInitialLanguageDetected(Session session, String tag, String htmlLang, int[] indexes,
+                                                  String[] texts, String[] languages) {
         if (!alive(session)) {
             return;
         }
         String detected = primary(tag);
         String target = primary(session.target);
-        if (!detected.isEmpty() && !"und".equals(detected) && !detected.equals(target)) {
-            onSource(session, detected, htmlLang, base, texts);
-            return;
+        for (String language : languages) {
+            String hint = primary(language);
+            if (!hint.isEmpty() && !"und".equals(hint) && !hint.equals(target)
+                    && TranslateLanguage.fromLanguageTag(hint) != null) {
+                String fallback = !detected.isEmpty() && !"und".equals(detected) && !detected.equals(target)
+                        ? detected : hint;
+                onSource(session, fallback, htmlLang, indexes, texts, languages);
+                return;
+            }
         }
-        probeLanguageCandidates(session, candidates, 0, detected, htmlLang, base, texts);
+        String fallback = !detected.isEmpty() && !"und".equals(detected) ? detected : primary(htmlLang);
+        onSource(session, fallback, htmlLang, indexes, texts, languages);
     }
 
-    private static void probeLanguageCandidates(Session session, ArrayList<String> candidates, int index,
-                                                String initialDetected, String htmlLang, int base, String[] texts) {
+    private static void onSource(Session session, String tag, String htmlLang, int[] indexes, String[] texts,
+                                 String[] languages) {
         if (!alive(session)) {
-            return;
-        }
-        if (index >= candidates.size() || index >= 8) {
-            String target = primary(session.target);
-            String pageLanguage = primary(htmlLang);
-            if (session.allowOnline && !textsEmpty(texts)) {
-                onSource(session, "auto", htmlLang, base, texts);
-            } else if (target.equals(initialDetected) || target.equals(pageLanguage)) {
-                abort(session, "このページは" + TranslateSettings.labelFor(session.target) + "です");
-            } else if (!pageLanguage.isEmpty()) {
-                onSource(session, pageLanguage, htmlLang, base, texts);
-            } else {
-                abort(session, "ページの言語を判定できませんでした");
-            }
-            return;
-        }
-        try {
-            identifier().identifyLanguage(candidates.get(index))
-                    .addOnSuccessListener(tag -> {
-                        String detected = primary(tag);
-                        if (!detected.isEmpty() && !"und".equals(detected)
-                                && !detected.equals(primary(session.target))) {
-                            onSource(session, detected, htmlLang, base, texts);
-                        } else {
-                            probeLanguageCandidates(session, candidates, index + 1, initialDetected,
-                                    htmlLang, base, texts);
-                        }
-                    })
-                    .addOnFailureListener(e -> probeLanguageCandidates(session, candidates, index + 1,
-                            initialDetected, htmlLang, base, texts));
-        } catch (Throwable t) {
-            probeLanguageCandidates(session, candidates, index + 1, initialDetected, htmlLang, base, texts);
-        }
-    }
-
-    private static boolean textsEmpty(String[] texts) {
-        for (String text : texts) {
-            if (text != null && !text.trim().isEmpty()) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static void onSource(Session session, String tag, String htmlLang, int base, String[] texts) {
-        BrowserView view = session.view.get();
-        if (view == null || !alive(session)) {
             return;
         }
         String source = primary(tag);
         if (source.isEmpty() || "und".equals(source)) {
             String pageLanguage = primary(htmlLang);
-            if (!pageLanguage.isEmpty() && !pageLanguage.equals(primary(session.target))) {
-                source = pageLanguage;
-            } else if (session.allowOnline) {
-                source = "auto";
-            } else {
-                abort(session, "ページの言語を判定できませんでした");
-                return;
-            }
-        }
-        if (source.equals(primary(session.target))) {
-            if (session.allowOnline) {
-                source = "auto";
-            } else {
-                abort(session, "このページは" + TranslateSettings.labelFor(session.target) + "です");
-                return;
-            }
+            source = !pageLanguage.isEmpty() ? pageLanguage : "und";
         }
         session.source = source;
-        dispatch(session, base, texts);
+        if (session.sourceFixed) {
+            dispatch(session, indexes, texts);
+        } else {
+            dispatchMixed(session, indexes, texts, languages, source);
+        }
     }
 
-    private static void dispatch(Session session, int base, String[] texts) {
+    private static void dispatch(Session session, int[] indexes, String[] texts) {
+        String source = primary(session.source);
+        if (source.isEmpty() || "und".equals(source)) {
+            mlFail(session, "ページの言語を判定できませんでした");
+            return;
+        }
+        ArrayList<Integer> selectedIndexes = new ArrayList<>(texts.length);
+        ArrayList<String> values = new ArrayList<>(texts.length);
+        for (int i = 0; i < texts.length; i++) {
+            if (texts[i] != null && !texts[i].trim().isEmpty() && indexes[i] >= 0) {
+                selectedIndexes.add(indexes[i]);
+                values.add(texts[i]);
+            }
+        }
+        enqueueChunks(session, source, selectedIndexes, values);
+    }
+
+    private static void dispatchMixed(Session session, int[] indexes, String[] texts, String[] hints, String fallbackSource) {
+        if (!alive(session)) {
+            return;
+        }
+        String fallback = primary(fallbackSource);
+        String target = primary(session.target);
+        String[] resolved = new String[texts.length];
+        int[] detectIndexes = new int[Math.min(texts.length, MAX_LANGUAGE_ID_NODES)];
+        int detectCount = 0;
+        for (int i = 0; i < texts.length; i++) {
+            String text = texts[i] == null ? "" : texts[i].trim();
+            String hint = hints != null && i < hints.length ? primary(hints[i]) : "";
+            if (!hint.isEmpty() && TranslateLanguage.fromLanguageTag(hint) != null) {
+                resolved[i] = hint;
+                continue;
+            }
+            if (text.length() >= 8) {
+                if (detectCount < detectIndexes.length) {
+                    resolved[i] = "und";
+                    detectIndexes[detectCount++] = i;
+                }
+            } else {
+                resolved[i] = fallback;
+            }
+        }
+        if (detectCount == 0) {
+            enqueueResolved(session, indexes, texts, resolved, fallback, target);
+            return;
+        }
+        final int total = detectCount;
+        final int[] completed = {0};
+        final boolean[] dispatched = {false};
+        Runnable[] finishCheck = new Runnable[1];
+        finishCheck[0] = () -> {
+            if (dispatched[0] || completed[0] < total || !alive(session)) {
+                return;
+            }
+            dispatched[0] = true;
+            enqueueResolved(session, indexes, texts, resolved, fallback, target);
+        };
+        for (int i = 0; i < detectCount; i++) {
+            int textIndex = detectIndexes[i];
+            String rawSample = texts[textIndex];
+            final String sample = rawSample.length() > 350 ? rawSample.substring(0, 350) : rawSample;
+            try {
+                identifier().identifyLanguage(sample)
+                        .addOnSuccessListener(tag -> {
+                            String language = primary(tag);
+                            if (!language.isEmpty() && !"und".equals(language)
+                                    && TranslateLanguage.fromLanguageTag(language) != null) {
+                                resolved[textIndex] = language;
+                            }
+                            completed[0]++;
+                            finishCheck[0].run();
+                        })
+                        .addOnFailureListener(error -> {
+                            completed[0]++;
+                            finishCheck[0].run();
+                        });
+            } catch (Throwable error) {
+                completed[0]++;
+            }
+        }
+        finishCheck[0].run();
+    }
+
+    private static void enqueueResolved(Session session, int[] indexes, String[] texts, String[] resolved,
+                                        String fallback, String target) {
+        if (!alive(session)) {
+            return;
+        }
+        Map<String, ArrayList<Integer>> groupedIndexes = new HashMap<>();
+        Map<String, ArrayList<String>> groupedTexts = new HashMap<>();
+        ArrayList<Integer> handledIndexes = new ArrayList<>(texts.length);
+        for (int i = 0; i < texts.length; i++) {
+            String text = texts[i] == null ? "" : texts[i].trim();
+            if (text.isEmpty() || indexes[i] < 0) {
+                continue;
+            }
+            String resolvedSource = resolved[i];
+            if (resolvedSource == null) {
+                continue;
+            }
+            String source = resolvedSource;
+            if (source.isEmpty() || "und".equals(source)) {
+                source = fallback;
+            }
+            source = primary(source);
+            handledIndexes.add(indexes[i]);
+            if (source.isEmpty() || "und".equals(source) || source.equals(target)
+                    || TranslateLanguage.fromLanguageTag(source) == null) {
+                continue;
+            }
+            groupedIndexes.computeIfAbsent(source, key -> new ArrayList<>()).add(indexes[i]);
+            groupedTexts.computeIfAbsent(source, key -> new ArrayList<>()).add(texts[i]);
+        }
+        BrowserView view = session.view.get();
+        if (view != null && !handledIndexes.isEmpty()) {
+            JSONArray handled = new JSONArray();
+            for (int index : handledIndexes) {
+                handled.put(index);
+            }
+            try {
+                view.evaluateJavascript("(function(){var s=window.__coaraTr;if(s&&s.markDoneIndexes)s.markDoneIndexes("
+                        + handled + ");})()", null);
+            } catch (Throwable ignored) {
+            }
+        }
+        if (groupedIndexes.isEmpty()) {
+            if (view != null) {
+                try {
+                    view.evaluateJavascript(COMPACT_JS, null);
+                } catch (Throwable ignored) {
+                }
+            }
+            if (!session.started && !session.errorShown && !session.silent && handledIndexes.size() == texts.length) {
+                session.errorShown = true;
+                if (view != null) {
+                    toast(view, fallback.equals(target)
+                            ? "このページはすでに翻訳先の言語です"
+                            : "翻訳できるテキストが見つかりませんでした");
+                }
+            }
+            schedulePoll(session);
+            return;
+        }
         session.started = true;
+        for (String source : groupedIndexes.keySet()) {
+            enqueueChunks(session, source, groupedIndexes.get(source), groupedTexts.get(source));
+        }
+    }
+
+    private static void enqueueChunks(Session session, String source, List<Integer> indexes, List<String> texts) {
+        if (!alive(session) || indexes == null || texts == null || indexes.isEmpty()) {
+            return;
+        }
         int from = 0;
-        while (from < texts.length) {
+        while (from < texts.size()) {
             int to = from;
             int chars = 0;
-            while (to < texts.length && to - from < CHUNK_SEGMENTS && (to == from || chars + texts[to].length() <= CHUNK_CHARS)) {
-                chars += texts[to].length();
+            while (to < texts.size() && to - from < CHUNK_SEGMENTS
+                    && (to == from || chars + texts.get(to).length() <= CHUNK_CHARS)) {
+                chars += texts.get(to).length();
                 to++;
             }
-            String[] part = new String[to - from];
-            System.arraycopy(texts, from, part, 0, part.length);
-            Chunk chunk = new Chunk(base + from, part);
+            int[] chunkIndexes = new int[to - from];
+            String[] chunkTexts = new String[to - from];
+            for (int i = from; i < to; i++) {
+                chunkIndexes[i - from] = indexes.get(i);
+                chunkTexts[i - from] = texts.get(i);
+            }
+            Chunk chunk = new Chunk(chunkIndexes, chunkTexts, source);
             session.pending++;
             if (session.online) {
                 runOnline(session, chunk);
@@ -442,7 +646,7 @@ public final class PageTranslator {
     }
 
     private static void runOnline(Session session, Chunk chunk) {
-        final String source = session.source;
+        final String source = chunk.source;
         final String target = session.target;
         executor().execute(() -> {
             String[] translated = null;
@@ -467,29 +671,50 @@ public final class PageTranslator {
     }
 
     private static String[] onlineTranslate(String source, String target, String[] texts) throws Exception {
+        String[] separators = createSeparators(texts.length - 1);
         StringBuilder joined = new StringBuilder();
         for (int i = 0; i < texts.length; i++) {
             if (i > 0) {
-                joined.append('\n');
+                joined.append("\n\n").append(separators[i - 1]).append("\n\n");
             }
             joined.append(texts[i]);
         }
         String output = post(source, target, joined.toString());
-        String[] parts = output.split("\n", -1);
-        int end = parts.length;
-        while (end > 0 && parts[end - 1].isEmpty()) {
-            end--;
-        }
-        if (end == texts.length) {
-            String[] result = new String[end];
-            System.arraycopy(parts, 0, result, 0, end);
+        String[] result = splitSeparated(output, separators, texts.length);
+        if (result != null) {
             return result;
         }
-        String[] result = new String[texts.length];
+        result = new String[texts.length];
         for (int i = 0; i < texts.length; i++) {
-            String single = post(source, target, texts[i]);
-            result[i] = single.replace("\n", " ").trim();
+            result[i] = post(source, target, texts[i]).replace("\n", " ").trim();
         }
+        return result;
+    }
+
+    private static String[] createSeparators(int count) {
+        String[] result = new String[Math.max(0, count)];
+        String nonce = UUID.randomUUID().toString().replace("-", "").toUpperCase(Locale.ROOT);
+        for (int i = 0; i < result.length; i++) {
+            result[i] = "ZXQCOARA" + nonce + "SEP" + i + "QXZ";
+        }
+        return result;
+    }
+
+    private static String[] splitSeparated(String input, String[] separators, int expected) {
+        if (input == null || expected < 1 || separators.length != expected - 1) {
+            return null;
+        }
+        String[] result = new String[expected];
+        int from = 0;
+        for (int i = 0; i < separators.length; i++) {
+            int index = input.indexOf(separators[i], from);
+            if (index < from) {
+                return null;
+            }
+            result[i] = input.substring(from, index).trim();
+            from = index + separators[i].length();
+        }
+        result[expected - 1] = input.substring(from).trim();
         return result;
     }
 
@@ -510,8 +735,12 @@ public final class PageTranslator {
             connection.setDoOutput(true);
             connection.setRequestProperty("User-Agent", ONLINE_UA);
             connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("Cache-Control", "no-store");
             connection.setFixedLengthStreamingMode(payload.length);
-            connection.getOutputStream().write(payload);
+            try (java.io.OutputStream request = connection.getOutputStream()) {
+                request.write(payload);
+            }
             if (connection.getResponseCode() != 200) {
                 throw new java.io.IOException("http " + connection.getResponseCode());
             }
@@ -520,6 +749,9 @@ public final class PageTranslator {
                 byte[] buffer = new byte[8192];
                 int read;
                 while ((read = in.read(buffer)) != -1) {
+                    if (out.size() + read > MAX_RESPONSE_BYTES) {
+                        throw new java.io.IOException("translation response too large");
+                    }
                     out.write(buffer, 0, read);
                 }
                 JSONObject json = new JSONObject(new String(out.toByteArray(), StandardCharsets.UTF_8));
@@ -553,16 +785,17 @@ public final class PageTranslator {
             session.mlRunning = false;
             return;
         }
-        Translator translator = translator(session.source, session.target);
+        Translator translator = translator(chunk.source, session.target);
         if (translator == null) {
             mlFail(session, "翻訳に失敗しました。ネットワーク接続を確認してください");
             return;
         }
-        ensureModel(session, translator, () -> mlTranslate(session, translator, chunk, new String[chunk.texts.length], 0));
+        ensureModel(session, translator, chunk.source, () -> mlTranslate(session, translator, chunk));
     }
 
-    private static void ensureModel(Session session, Translator translator, Runnable ready) {
-        if (session.mlReady) {
+    private static void ensureModel(Session session, Translator translator, String source, Runnable ready) {
+        String modelKey = translatorKey(source, session.target);
+        if (session.readyModelKeys.contains(modelKey)) {
             ready.run();
             return;
         }
@@ -577,7 +810,7 @@ public final class PageTranslator {
             translator.downloadModelIfNeeded(new DownloadConditions.Builder().build())
                     .addOnSuccessListener(unused -> {
                         UiThread.mainHandler().removeCallbacks(hint);
-                        session.mlReady = true;
+                        session.readyModelKeys.add(modelKey);
                         if (alive(session)) {
                             ready.run();
                         } else {
@@ -594,7 +827,41 @@ public final class PageTranslator {
         }
     }
 
-    private static void mlTranslate(Session session, Translator translator, Chunk chunk, String[] result, int index) {
+    private static void mlTranslate(Session session, Translator translator, Chunk chunk) {
+        if (!alive(session)) {
+            session.mlRunning = false;
+            return;
+        }
+        String[] separators = createSeparators(chunk.texts.length - 1);
+        StringBuilder input = new StringBuilder();
+        for (int i = 0; i < chunk.texts.length; i++) {
+            if (i > 0) {
+                input.append("\n\n").append(separators[i - 1]).append("\n\n");
+            }
+            input.append(chunk.texts[i]);
+        }
+        try {
+            translator.translate(input.toString())
+                    .addOnSuccessListener(translated -> {
+                        String[] parts = splitSeparated(translated, separators, chunk.texts.length);
+                        if (parts != null) {
+                            apply(session, chunk, parts);
+                            session.mlRunning = false;
+                            finish(session);
+                            mlPump(session);
+                        } else {
+                            mlTranslateSequential(session, translator, chunk, new String[chunk.texts.length], 0);
+                        }
+                    })
+                    .addOnFailureListener(error -> mlTranslateSequential(
+                            session, translator, chunk, new String[chunk.texts.length], 0));
+        } catch (Throwable error) {
+            mlTranslateSequential(session, translator, chunk, new String[chunk.texts.length], 0);
+        }
+    }
+
+    private static void mlTranslateSequential(Session session, Translator translator, Chunk chunk,
+                                              String[] result, int index) {
         if (!alive(session)) {
             session.mlRunning = false;
             return;
@@ -610,15 +877,15 @@ public final class PageTranslator {
             translator.translate(chunk.texts[index])
                     .addOnSuccessListener(text -> {
                         result[index] = text;
-                        mlTranslate(session, translator, chunk, result, index + 1);
+                        mlTranslateSequential(session, translator, chunk, result, index + 1);
                     })
-                    .addOnFailureListener(e -> {
-                        result[index] = "";
-                        mlTranslate(session, translator, chunk, result, index + 1);
+                    .addOnFailureListener(error -> {
+                        result[index] = chunk.texts[index];
+                        mlTranslateSequential(session, translator, chunk, result, index + 1);
                     });
-        } catch (Throwable t) {
-            result[index] = "";
-            mlTranslate(session, translator, chunk, result, index + 1);
+        } catch (Throwable error) {
+            result[index] = chunk.texts[index];
+            mlTranslateSequential(session, translator, chunk, result, index + 1);
         }
     }
 
@@ -643,9 +910,13 @@ public final class PageTranslator {
         for (String item : result) {
             array.put(item == null ? "" : item);
         }
+        JSONArray indexes = new JSONArray();
+        for (int index : chunk.indexes) {
+            indexes.put(index);
+        }
         try {
-            view.evaluateJavascript("(function(){var s=window.__coaraTr;if(s)s.apply("
-                    + chunk.base + "," + array.toString() + ");})()", null);
+            view.evaluateJavascript("(function(){var s=window.__coaraTr;if(s)s.applyIndexes("
+                    + indexes.toString() + "," + array.toString() + ");})()", null);
         } catch (Exception ignored) {
         }
     }
@@ -654,6 +925,13 @@ public final class PageTranslator {
         session.pending--;
         if (session.pending <= 0) {
             session.pending = 0;
+            BrowserView view = session.view.get();
+            if (view != null && alive(session)) {
+                try {
+                    view.evaluateJavascript(COMPACT_JS, null);
+                } catch (Throwable ignored) {
+                }
+            }
             schedulePoll(session);
         }
     }
@@ -664,6 +942,7 @@ public final class PageTranslator {
             return;
         }
         SESSIONS.remove(view);
+        cancelSession(session);
         try {
             view.evaluateJavascript(RESTORE_JS, null);
         } catch (Exception ignored) {
@@ -712,6 +991,12 @@ public final class PageTranslator {
         }
     }
 
+    private static String translatorKey(String sourceTag, String targetTag) {
+        String from = TranslateLanguage.fromLanguageTag(sourceTag);
+        String to = TranslateLanguage.fromLanguageTag(targetTag);
+        return from == null || to == null ? "" : from + ">" + to;
+    }
+
     private static Translator translator(String sourceTag, String targetTag) {
         String from = TranslateLanguage.fromLanguageTag(sourceTag);
         String to = TranslateLanguage.fromLanguageTag(targetTag);
@@ -728,6 +1013,20 @@ public final class PageTranslator {
             TRANSLATORS.put(key, translator);
         }
         return translator;
+    }
+
+    static void identifyLanguage(Context context, String text, java.util.function.Consumer<String> callback) {
+        if (callback == null) {
+            return;
+        }
+        ensureMlKit(context);
+        try {
+            identifier().identifyLanguage(text == null ? "" : text)
+                    .addOnSuccessListener(callback::accept)
+                    .addOnFailureListener(error -> callback.accept("und"));
+        } catch (Throwable t) {
+            callback.accept("und");
+        }
     }
 
     private static LanguageIdentifier identifier() {
