@@ -65,6 +65,7 @@ import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.Nullable;
+import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
@@ -125,6 +126,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.File;
@@ -228,6 +230,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private boolean deskuaEnabled = false;
 
     private LruCache<String, Bitmap> faviconCache;
+    private static final int MAX_FAVICON_SIDE = 96;
+    private static final int MAX_FAVICON_BYTES = 512 * 1024;
+    private static final int MAX_CACHED_FAVICON_BYTES = 512 * 1024;
     private final Set<String> faviconMissing = Collections.synchronizedSet(new java.util.HashSet<String>());
     private final Set<String> faviconLoading = Collections.synchronizedSet(new java.util.HashSet<String>());
     private final ExecutorService faviconExecutor = Executors.newFixedThreadPool(2);
@@ -311,12 +316,67 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             });
     static {
     }
+
+    private boolean redirectingCustomTabLaunch;
+
+    protected boolean isCustomTabMode() {
+        return false;
+    }
+
+    protected String getCustomTabInitialUrl() {
+        return null;
+    }
+
+    protected boolean shouldRunCustomTabForIntent(Intent intent) {
+        return true;
+    }
+
+    protected void onCustomTabIntent(Intent intent) {
+    }
+
+    protected void onCustomTabPageStarted(BrowserView view) {
+    }
+
+    protected void onCustomTabPageChanged(BrowserView view) {
+    }
+
+    protected void onCustomTabPageFinished(BrowserView view) {
+    }
+
+    protected void onCustomTabPageFailed(BrowserView view) {
+    }
+
+    protected void onCustomTabMessage(BrowserView view, JSONObject message) {
+    }
+
+    protected void onCustomTabScrollChanged(int x, int y) {
+    }
+
+    protected final BrowserView getCustomTabBrowserView() {
+        if (currentTabIndex < 0 || currentTabIndex >= webViews.size()) {
+            return null;
+        }
+        return webViews.get(currentTabIndex);
+    }
+
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (isCustomTabMode() && !shouldRunCustomTabForIntent(getIntent())) {
+            if (!forwardUnmarkedCustomTabIntent(getIntent())) {
+                redirectingCustomTabLaunch = true;
+                finish();
+            }
+            return;
+        }
+        if (!isCustomTabMode() && forwardCustomTabsIntent(getIntent(), true)) {
+            return;
+        }
         setContentView(R.layout.activity_main);
 
-        maybeRequestLaunchProtection();
+        if (!isCustomTabMode()) {
+            maybeRequestLaunchProtection();
+        }
 
         toolbar = findViewById(R.id.topAppBar);
         setSupportActionBar(toolbar);
@@ -330,7 +390,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         pluginManager = PluginManager.get(this);
         pluginManager.addListener(this);
         lastPluginRuntimeVersion = pluginManager.runtimeVersion();
-        checkSentinelAndClearTabsIfNecessary();
+        if (!isCustomTabMode()) {
+            checkSentinelAndClearTabsIfNecessary();
+        }
         ensureCacheSentinelExists();
         darkModeEnabled = pref.getBoolean(KEY_DARK_MODE, false);
         basicAuthEnabled = pref.getBoolean(KEY_BASIC_AUTH, false);
@@ -347,8 +409,10 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 return Math.max(1, bitmap.getByteCount() / 1024);
             }
         };
-        loadBookmarks();
-        loadHistory();
+        if (!isCustomTabMode()) {
+            loadBookmarks();
+            loadHistory();
+        }
         urlEditText = findViewById(R.id.urlEditText);
         urlContainer = findViewById(R.id.urlContainer);
         urlEditOriginalStrokeColor = urlContainer.getStrokeColor();
@@ -367,7 +431,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         tabCountTextView = findViewById(R.id.tabCountTextView);
         tabCountTextView.setOnClickListener(v -> showTabsDialog());
 
-        if (pref.contains(KEY_TABS)) {
+        if (!isCustomTabMode() && pref.contains(KEY_TABS)) {
             loadTabsState();
         } else {
             BrowserView initialWebView = createNewWebView();
@@ -376,8 +440,15 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             webViews.add(initialWebView);
             currentTabIndex = 0;
             webViewContainer.addView(initialWebView);
-            initialWebView.loadUrl(START_PAGE);
-            updatePullToRefreshState(initialWebView, START_PAGE);
+            String initialUrl = isCustomTabMode() ? getCustomTabInitialUrl() : START_PAGE;
+            if (initialUrl == null || initialUrl.isEmpty()) {
+                initialUrl = isCustomTabMode() ? "about:blank" : START_PAGE;
+            }
+            if (isCustomTabMode()) {
+                markExternalTab(initialWebView, initialUrl);
+            }
+            initialWebView.loadUrl(initialUrl);
+            updatePullToRefreshState(initialWebView, initialUrl);
         }
         updateTabCount();
 
@@ -572,7 +643,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         });
 
         loadBackgroundImage();
-        handleIntent(getIntent());
+        if (!isCustomTabMode()) {
+            handleIntent(getIntent());
+        }
         urlEditText.clearFocus();
         webViewContainer.setFocusableInTouchMode(true);
         webViewContainer.requestFocus();
@@ -596,8 +669,12 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         if (current != null && goBackInCurrentTab(current)) {
             return;
         }
-        if (current != null && externalTabs.remove(current)) {
-            returnToCallingApp(current);
+        if (current != null && externalTabs.contains(current)) {
+            if (isCustomTabMode()) {
+                finish();
+            } else {
+                returnToCallingApp(current);
+            }
             return;
         }
         Toast.makeText(MainActivity.this, "履歴がありません", Toast.LENGTH_SHORT).show();
@@ -1053,7 +1130,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 if (BrowserUrlRouter.isWebUrl(url)) {
                     createNewExternalTab(url);
                 } else {
-                    BrowserUrlRouter.handleUrlLoading(this, getCurrentWebView(), url);
+                    BrowserUrlRouter.handleIncomingViewIntent(this, getCurrentWebView(), data);
                 }
             }
             setIntent(new Intent());
@@ -1095,14 +1172,110 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         return text;
     }
 
+    private boolean forwardUnmarkedCustomTabIntent(Intent source) {
+        android.net.Uri data = source == null ? null : source.getData();
+        if (data == null || !BrowserUrlRouter.isWebUrl(data.toString())) {
+            return false;
+        }
+        Intent target = new Intent(this, MainActivity.class);
+        target.setAction(Intent.ACTION_VIEW);
+        target.setData(data);
+        int safeFlags = Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NO_HISTORY;
+        target.setFlags(source.getFlags() & safeFlags);
+        try {
+            redirectingCustomTabLaunch = true;
+            startActivity(target);
+            finish();
+            return true;
+        } catch (RuntimeException error) {
+            redirectingCustomTabLaunch = false;
+            return false;
+        }
+    }
+
+    private boolean forwardCustomTabsIntent(Intent source, boolean finishCurrentActivity) {
+        if (source == null || !Intent.ACTION_VIEW.equals(source.getAction()) || source.getData() == null) {
+            return false;
+        }
+        boolean hasCustomTabsMarker = false;
+        try {
+            if (source.hasExtra(CustomTabsIntent.EXTRA_SESSION)) {
+                hasCustomTabsMarker = true;
+            } else if (source.getExtras() != null) {
+                for (String key : source.getExtras().keySet()) {
+                    if (key != null && (key.startsWith("android.support.customtabs.extra.")
+                            || key.startsWith("androidx.browser.customtabs.extra."))) {
+                        hasCustomTabsMarker = true;
+                        break;
+                    }
+                }
+            }
+        } catch (RuntimeException ignored) {
+        }
+        if (!hasCustomTabsMarker) {
+            return false;
+        }
+        Intent target = new Intent(this, CustomTabActivity.class);
+        target.setAction(Intent.ACTION_VIEW);
+        target.setData(source.getData());
+        try {
+            if (source.getExtras() != null) {
+                target.putExtras(source.getExtras());
+            }
+        } catch (RuntimeException ignored) {
+        }
+        int safeFlags = Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NO_HISTORY;
+        target.setFlags(source.getFlags() & safeFlags);
+        try {
+            redirectingCustomTabLaunch = finishCurrentActivity;
+            startActivity(target);
+            if (finishCurrentActivity) {
+                finish();
+            }
+            return true;
+        } catch (RuntimeException error) {
+            redirectingCustomTabLaunch = false;
+            return false;
+        }
+    }
+
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (isCustomTabMode()) {
+            if (!shouldRunCustomTabForIntent(intent)) {
+                if (!forwardUnmarkedCustomTabIntent(intent)) {
+                    redirectingCustomTabLaunch = true;
+                    finish();
+                }
+                return;
+            }
+            onCustomTabIntent(intent);
+            return;
+        }
+        if (forwardCustomTabsIntent(intent, false)) {
+            return;
+        }
         handleIntent(intent);
     }
 
     @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (com.coara.browser2.gecko.BrowserEngine.isInitialized()) {
+            com.coara.browser2.gecko.BrowserEngine.get()
+                    .handleWebAuthnActivityResult(requestCode, resultCode, data);
+        }
+    }
+
+    @Override
     protected void onResume() {
+        if (redirectingCustomTabLaunch) {
+            super.onResume();
+            return;
+        }
         BrowserEngine.get().getAgent().setThirdPartyCookieListener(this::onThirdPartyCookieFromAgent);
         if (networkStateGuard == null) {
             networkStateGuard = new NetworkStateGuard(this, () -> {
@@ -1147,6 +1320,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
+        if (redirectingCustomTabLaunch) {
+            return;
+        }
         if (hasFocus) {
             BrowserMenuController.refresh(this);
             if (pluginReloadPending) {
@@ -1160,6 +1336,10 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
     @Override
     protected void onPause() {
+        if (redirectingCustomTabLaunch) {
+            super.onPause();
+            return;
+        }
         BrowserEngine.get().getAgent().setThirdPartyCookieListener(null);
         if (networkStateGuard != null) {
             networkStateGuard.stop();
@@ -1177,6 +1357,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     @Override
     public void onConfigurationChanged(android.content.res.Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        if (redirectingCustomTabLaunch) {
+            return;
+        }
         if (deskuaEnabled) {
             BrowserEngine.get().updateDesktopViewport(this);
         }
@@ -1186,11 +1369,18 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     @Override
     public void onTrimMemory(int level) {
         super.onTrimMemory(level);
+        if (redirectingCustomTabLaunch) {
+            return;
+        }
         trimBrowserMemory(level);
     }
 
     @Override
     protected void onDestroy() {
+        if (redirectingCustomTabLaunch) {
+            super.onDestroy();
+            return;
+        }
         com.coara.browser2.fx.FxExtensionManager.get().clearTabHost(fxTabHost);
         PageTranslator.release();
         if (findController != null) {
@@ -1510,6 +1700,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     }
 
     private void saveTabsState() {
+        if (isCustomTabMode()) {
+            return;
+        }
         synchronized (webViews) {
             if (webViews.isEmpty() || tabHistoryStore == null) {
                 return;
@@ -2012,11 +2205,13 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     return false;
                 }
                 ExternalDownloadTabTracker.onMainFrameNavigation(view, mainFrame, hasGesture, redirect, url);
-                return BrowserUrlRouter.handleUrlLoading(MainActivity.this, view, url, mainFrame);
+                return BrowserUrlRouter.handleUrlLoading(MainActivity.this, view, url, mainFrame,
+                        hasGesture, redirect);
             }
 
             @Override
             public void onPageStarted(BrowserView view, String url) {
+                BrowserThemeManager.onPageStarted(view);
                 PageTranslator.onPageStarted(view);
                 ExternalDownloadTabTracker.onPageStarted(view, url);
                 PluginRuntime.onPageStarted(view, url);
@@ -2034,6 +2229,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     updatePullToRefreshState(view, url);
                     showCachedFavicon(url);
                     updateBookmarkStar();
+                    if (isCustomTabMode()) {
+                        onCustomTabPageStarted(view);
+                    }
                 }
             }
 
@@ -2055,12 +2253,18 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     urlEditText.setText(url);
                 }
                 updatePullToRefreshState(view, url);
+                if (isCustomTabMode()) {
+                    onCustomTabPageChanged(view);
+                }
             }
 
             @Override
             public void onPageFinished(BrowserView view, String url) {
                 if (url == null) {
                     url = "";
+                }
+                if (isCustomTabMode() && view == getCurrentWebView()) {
+                    onCustomTabPageFinished(view);
                 }
                 ExternalDownloadTabTracker.onPageFinished(view, url);
                 if (findController != null) {
@@ -2105,6 +2309,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
             @Override
             public void onLoadFailed(BrowserView view, LoadFailure failure) {
+                if (isCustomTabMode() && view == getCurrentWebView()) {
+                    onCustomTabPageFailed(view);
+                }
                 if (swipeRefreshLayout.isRefreshing() && view == getCurrentWebView()) {
                     swipeRefreshLayout.setRefreshing(false);
                 }
@@ -2175,6 +2382,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     updateHistoryTitle(current, title);
                 }
                 dirtyStateTabs.add(view);
+                if (isCustomTabMode() && view == getCurrentWebView()) {
+                    onCustomTabPageChanged(view);
+                }
             }
 
             @Override
@@ -2183,8 +2393,25 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             }
 
             @Override
+            public void onCustomTabsAgentReady(BrowserView view) {
+                if (isCustomTabMode() && view == getCurrentWebView()) {
+                    UiThread.mainHandler().post(() -> onCustomTabPageChanged(view));
+                }
+            }
+
+            @Override
+            public void onCustomTabsMessage(BrowserView view, JSONObject message) {
+                if (isCustomTabMode() && view == getCurrentWebView()) {
+                    UiThread.mainHandler().post(() -> onCustomTabMessage(view, message));
+                }
+            }
+
+            @Override
             public void onScrollChanged(BrowserView view, int x, int y) {
                 if (view == getCurrentWebView()) {
+                    if (isCustomTabMode()) {
+                        onCustomTabScrollChanged(x, y);
+                    }
                     scheduleSnapshot(view, 1800L);
                 }
             }
@@ -2207,6 +2434,32 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 } else {
                     leaveFullScreen();
                 }
+            }
+
+            @Override
+            public void onPictureInPictureRequested(BrowserView view, String placementToken) {
+                if (!com.coara.browser2.MediaPipActivity.launch(MainActivity.this, view, placementToken)) {
+                    view.setPictureInPictureActive(false);
+                }
+            }
+
+            @Override
+            public void onPictureInPictureClosed(BrowserView view) {
+                com.coara.browser2.MediaPipActivity.closeForSource(view);
+                view.setPictureInPictureActive(false);
+            }
+
+            @Override
+            public void onMediaPlaybackChanged(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession,
+                                               boolean playing, boolean stopped, String title, String artist) {
+                com.coara.browser2.MediaPlaybackService.onPlaybackState(
+                        MainActivity.this, mediaSession, playing, stopped, title, artist);
+            }
+
+            @Override
+            public void onMediaMetadataChanged(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession,
+                                               String title, String artist) {
+                com.coara.browser2.MediaPlaybackService.onMetadata(MainActivity.this, mediaSession, title, artist);
             }
 
             @Override
@@ -3025,6 +3278,16 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             if (index == -1) {
                 return;
             }
+            Runnable saveTask = stateSaveTasks.remove(webView);
+            if (saveTask != null) {
+                UiThread.mainHandler().removeCallbacks(saveTask);
+            }
+            Runnable snapshotTask = snapshotTasks.remove(webView);
+            if (snapshotTask != null) {
+                UiThread.mainHandler().removeCallbacks(snapshotTask);
+            }
+            dirtyStateTabs.remove(webView);
+            dirtySnapshotTabs.remove(webView);
 
             Object tag = webView.getTag();
             int id = (tag instanceof Integer) ? (Integer) tag : -1;
@@ -5304,42 +5567,127 @@ private void addHistory(String url, String title) {
         if (!file.exists() && url != null) {
             file = new File(dir, md5Name(url));
         }
-        if (!file.exists()) {
+        if (!file.isFile()) {
             return null;
         }
-        return BitmapFactory.decodeFile(file.getAbsolutePath());
+        long length = file.length();
+        if (length <= 0) {
+            return null;
+        }
+        if (length > MAX_CACHED_FAVICON_BYTES) {
+            try {
+                file.delete();
+            } catch (Throwable ignored) {
+            }
+            return null;
+        }
+        try (InputStream input = new java.io.BufferedInputStream(new FileInputStream(file), 8192)) {
+            byte[] data = readLimitedBytes(input, MAX_CACHED_FAVICON_BYTES);
+            return decodeFaviconBytes(data);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private byte[] readLimitedBytes(InputStream input, int maxBytes) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream(Math.min(8192, maxBytes));
+        byte[] buffer = new byte[8192];
+        int total = 0;
+        int count;
+        while ((count = input.read(buffer)) != -1) {
+            if (count == 0) {
+                continue;
+            }
+            total += count;
+            if (total > maxBytes) {
+                return null;
+            }
+            output.write(buffer, 0, count);
+        }
+        return total == 0 ? null : output.toByteArray();
+    }
+
+    private Bitmap decodeFaviconBytes(byte[] data) {
+        if (data == null || data.length == 0) {
+            return null;
+        }
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeByteArray(data, 0, data.length, bounds);
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            return null;
+        }
+        int sample = 1;
+        while (bounds.outWidth / sample > MAX_FAVICON_SIDE * 2
+                || bounds.outHeight / sample > MAX_FAVICON_SIDE * 2) {
+            if (sample > (1 << 20)) {
+                return null;
+            }
+            sample <<= 1;
+        }
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = sample;
+        options.inPreferredConfig = Bitmap.Config.ARGB_8888;
+        options.inDither = true;
+        Bitmap bitmap = BitmapFactory.decodeByteArray(data, 0, data.length, options);
+        Bitmap normalized = normalizeFavicon(bitmap);
+        if (bitmap != null && normalized != bitmap && !bitmap.isRecycled()) {
+            bitmap.recycle();
+        }
+        return normalized;
     }
 
     private Bitmap fetchFavicon(String pageUrl) {
+        HttpURLConnection connection = null;
         try {
             URL base = new URL(pageUrl);
-            String target = base.getProtocol() + "://" + base.getHost() + (base.getPort() > 0 ? ":" + base.getPort() : "") + "/favicon.ico";
+            if (!("http".equalsIgnoreCase(base.getProtocol()) || "https".equalsIgnoreCase(base.getProtocol()))) {
+                return null;
+            }
+            boolean startedHttps = "https".equalsIgnoreCase(base.getProtocol());
+            URL current = new URL(base.getProtocol() + "://" + base.getHost()
+                    + (base.getPort() > 0 ? ":" + base.getPort() : "") + "/favicon.ico");
             for (int hop = 0; hop < 4; hop++) {
-                HttpURLConnection connection = (HttpURLConnection) new URL(target).openConnection();
-                connection.setConnectTimeout(3000);
-                connection.setReadTimeout(3000);
+                connection = (HttpURLConnection) current.openConnection();
+                connection.setConnectTimeout(2500);
+                connection.setReadTimeout(2500);
                 connection.setInstanceFollowRedirects(false);
+                connection.setUseCaches(true);
+                connection.setRequestProperty("Accept", "image/avif,image/webp,image/png,image/*,*/*;q=0.5");
                 int code = connection.getResponseCode();
                 if (code >= 300 && code < 400) {
                     String location = connection.getHeaderField("Location");
                     connection.disconnect();
-                    if (location == null) {
+                    connection = null;
+                    if (location == null || location.isEmpty()) {
                         return null;
                     }
-                    target = new URL(new URL(target), location).toString();
+                    URL next = new URL(current, location);
+                    String protocol = next.getProtocol();
+                    if (!("http".equalsIgnoreCase(protocol) || "https".equalsIgnoreCase(protocol))
+                            || (startedHttps && !"https".equalsIgnoreCase(protocol))) {
+                        return null;
+                    }
+                    current = next;
                     continue;
                 }
-                if (code == HttpURLConnection.HTTP_OK) {
-                    try (InputStream is = connection.getInputStream()) {
-                        return BitmapFactory.decodeStream(is);
-                    } finally {
-                        connection.disconnect();
-                    }
+                if (code != HttpURLConnection.HTTP_OK) {
+                    return null;
                 }
-                connection.disconnect();
-                return null;
+                long contentLength = connection.getContentLengthLong();
+                if (contentLength > MAX_FAVICON_BYTES) {
+                    return null;
+                }
+                try (InputStream input = new java.io.BufferedInputStream(connection.getInputStream(), 8192)) {
+                    byte[] data = readLimitedBytes(input, MAX_FAVICON_BYTES);
+                    return decodeFaviconBytes(data);
+                }
             }
         } catch (Exception ignored) {
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
         }
         return null;
     }
@@ -5380,7 +5728,7 @@ private void addHistory(String url, String title) {
             try {
                 loaded = readFaviconFromDisk(key, url);
                 if (loaded == null && !faviconMissing.contains(key)) {
-                    loaded = normalizeFavicon(fetchFavicon(url));
+                    loaded = fetchFavicon(url);
                     if (loaded != null) {
                         saveFaviconToFile(key, loaded);
                     } else {

@@ -1,5 +1,6 @@
 package com.coara.browser2;
 
+import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
@@ -20,6 +21,7 @@ import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.coara.browser2.gecko.BrowserClient;
+import com.coara.browser2.gecko.BrowserEngine;
 import com.coara.browser2.gecko.BrowserHost;
 import com.coara.browser2.gecko.BrowserView;
 import com.coara.browser2.gecko.ValueCallback;
@@ -102,6 +104,14 @@ public class pagedl extends AppCompatActivity implements BrowserHost {
     private String requestedUrl = "";
     private boolean captureStarted;
     private Runnable saveTimeoutRunnable;
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (BrowserEngine.isInitialized()) {
+            BrowserEngine.get().handleWebAuthnActivityResult(requestCode, resultCode, data);
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {

@@ -538,7 +538,7 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                         ExternalDownloadTabTracker.markExternal(current, url);
                     }
                 } else {
-                    BrowserUrlRouter.handleUrlLoading(this, getCurrentWebView(), url);
+                    BrowserUrlRouter.handleIncomingViewIntent(this, getCurrentWebView(), data);
                 }
             }
             setIntent(new Intent());
@@ -565,6 +565,15 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                 faviconCache.evictAll();
             } catch (Exception ignored) {
             }
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (com.coara.browser2.gecko.BrowserEngine.isInitialized()) {
+            com.coara.browser2.gecko.BrowserEngine.get()
+                    .handleWebAuthnActivityResult(requestCode, resultCode, data);
         }
     }
 
@@ -1011,7 +1020,8 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                     return false;
                 }
                 ExternalDownloadTabTracker.onMainFrameNavigation(view, mainFrame, hasGesture, redirect, url);
-                return BrowserUrlRouter.handleUrlLoading(SecretActivity.this, view, url, mainFrame);
+                return BrowserUrlRouter.handleUrlLoading(SecretActivity.this, view, url, mainFrame,
+                        hasGesture, redirect);
             }
 
             @Override
@@ -1122,6 +1132,33 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                 } else {
                     leaveFullScreen();
                 }
+            }
+
+            @Override
+            public void onPictureInPictureRequested(BrowserView view, String placementToken) {
+                if (!com.coara.browser2.MediaPipActivity.launch(SecretActivity.this, view, placementToken)) {
+                    view.setPictureInPictureActive(false);
+                }
+            }
+
+            @Override
+            public void onPictureInPictureClosed(BrowserView view) {
+                com.coara.browser2.MediaPipActivity.closeForSource(view);
+                view.setPictureInPictureActive(false);
+            }
+
+            @Override
+            public void onMediaPlaybackChanged(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession,
+                                               boolean playing, boolean stopped, String title, String artist) {
+                com.coara.browser2.MediaPlaybackService.onPlaybackState(
+                        SecretActivity.this, mediaSession, playing, stopped, "プライベート再生", "Coara Gecko");
+            }
+
+            @Override
+            public void onMediaMetadataChanged(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession,
+                                               String title, String artist) {
+                com.coara.browser2.MediaPlaybackService.onMetadata(
+                        SecretActivity.this, mediaSession, "プライベート再生", "Coara Gecko");
             }
 
             @Override
