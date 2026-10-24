@@ -15,7 +15,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 24
-        versionName = "1.1.1"
+        versionName = "80"
         multiDexEnabled = true
         vectorDrawables.useSupportLibrary = true
         if (project.hasProperty('bundleBuild')) {
