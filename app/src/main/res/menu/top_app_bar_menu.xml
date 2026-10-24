@@ -48,6 +48,7 @@
             <item android:id="@+id/action_custom_theme" android:title="カスタムテーマ" />
             <item android:id="@+id/action_offscreen_pre_raster" android:title="先読みレンダリング" android:checkable="true" />
             <item android:id="@+id/action_picture_in_picture" android:title="小窓再生 (PiP)" android:checkable="true" />
+            <item android:id="@+id/action_picture_in_picture_system_settings" android:title="AndroidのPiP許可設定" />
         </menu>
     </item>
 
