@@ -1,8 +1,14 @@
 package com.coara.browser2.gecko;
 
+import android.app.Activity;
+import android.app.Application;
+import android.app.PendingIntent;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentSender;
 import android.content.SharedPreferences;
 import android.content.res.AssetManager;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -22,7 +28,11 @@ import org.mozilla.geckoview.WebExtension;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
 import java.util.List;
 
 public final class BrowserEngine {
@@ -49,6 +59,25 @@ public final class BrowserEngine {
     private boolean imagesEnabled = true;
     private boolean zoomEnabled;
     private int desktopViewportWidth = -1;
+    private WeakReference<Activity> resumedActivity = new WeakReference<>(null);
+    private final List<WeakReference<Activity>> resumedActivities = new ArrayList<>();
+    private final Map<Integer, PendingActivityResult> pendingActivityResults = new HashMap<>();
+    private static final int WEBAUTHN_REQUEST_CODE_START = 0x6A00;
+    private static final int WEBAUTHN_REQUEST_CODE_COUNT = 256;
+    private int nextWebAuthnRequestCode = WEBAUTHN_REQUEST_CODE_START;
+    private static final long ACTIVITY_RESULT_TIMEOUT_MS = 300000L;
+
+    private static final class PendingActivityResult {
+        final GeckoResult<Intent> result;
+        final Runnable timeout;
+        final WeakReference<Activity> sourceActivity;
+
+        PendingActivityResult(GeckoResult<Intent> result, Runnable timeout, Activity sourceActivity) {
+            this.result = result;
+            this.timeout = timeout;
+            this.sourceActivity = new WeakReference<>(sourceActivity);
+        }
+    }
 
     private BrowserEngine(Context context) {
         this.appContext = context.getApplicationContext();
@@ -77,6 +106,7 @@ public final class BrowserEngine {
     }
 
     private void start() {
+        registerActivityTracking();
         SharedPreferences prefs = appContext.getSharedPreferences(BrowserConstants.PREF_NAME, Context.MODE_PRIVATE);
         darkMode = prefs.getBoolean(BrowserConstants.KEY_DARK_MODE, false);
         persistedBaseUrl = prefs.getString(KEY_CORE_BASE, null);
@@ -104,6 +134,7 @@ public final class BrowserEngine {
                 .build();
         settings.setWebContentIsolationStrategy(GeckoRuntimeSettings.STRATEGY_ISOLATE_EVERYTHING);
         runtime = GeckoRuntime.create(appContext, settings);
+        runtime.setActivityDelegate(this::startWebAuthnActivityForResult);
         runtime.getSettings().setPreferredColorScheme(darkMode
                 ? GeckoRuntimeSettings.COLOR_SCHEME_DARK
                 : GeckoRuntimeSettings.COLOR_SCHEME_LIGHT);
@@ -117,6 +148,174 @@ public final class BrowserEngine {
         executor = new GeckoWebExecutor(runtime);
         defaultUserAgent = GeckoSession.getDefaultUserAgent();
         installCore();
+    }
+
+
+    private void registerActivityTracking() {
+        if (!(appContext instanceof Application)) {
+            return;
+        }
+        ((Application) appContext).registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
+            @Override
+            public void onActivityCreated(Activity activity, Bundle savedInstanceState) {
+            }
+
+            @Override
+            public void onActivityStarted(Activity activity) {
+            }
+
+            @Override
+            public void onActivityResumed(Activity activity) {
+                markActivityResumed(activity);
+            }
+
+            @Override
+            public void onActivityPaused(Activity activity) {
+                removeResumedActivity(activity);
+            }
+
+            @Override
+            public void onActivityStopped(Activity activity) {
+            }
+
+            @Override
+            public void onActivitySaveInstanceState(Activity activity, Bundle outState) {
+            }
+
+            @Override
+            public void onActivityDestroyed(Activity activity) {
+                removeResumedActivity(activity);
+                List<PendingActivityResult> abandoned = new ArrayList<>();
+                Iterator<Map.Entry<Integer, PendingActivityResult>> iterator =
+                        pendingActivityResults.entrySet().iterator();
+                while (iterator.hasNext()) {
+                    PendingActivityResult pending = iterator.next().getValue();
+                    if (pending.sourceActivity.get() == activity) {
+                        iterator.remove();
+                        main.removeCallbacks(pending.timeout);
+                        abandoned.add(pending);
+                    }
+                }
+                for (PendingActivityResult pending : abandoned) {
+                    pending.result.completeExceptionally(
+                            new IllegalStateException("Browser activity closed during WebAuthn"));
+                }
+            }
+        });
+    }
+
+    private void markActivityResumed(Activity activity) {
+        for (int i = resumedActivities.size() - 1; i >= 0; i--) {
+            Activity existing = resumedActivities.get(i).get();
+            if (existing == null || existing == activity) {
+                resumedActivities.remove(i);
+            }
+        }
+        resumedActivities.add(new WeakReference<>(activity));
+        refreshResumedActivity();
+    }
+
+    private void removeResumedActivity(Activity activity) {
+        for (int i = resumedActivities.size() - 1; i >= 0; i--) {
+            Activity existing = resumedActivities.get(i).get();
+            if (existing == null || existing == activity) {
+                resumedActivities.remove(i);
+            }
+        }
+        refreshResumedActivity();
+    }
+
+    private void refreshResumedActivity() {
+        Activity candidate = null;
+        for (int i = resumedActivities.size() - 1; i >= 0; i--) {
+            Activity activity = resumedActivities.get(i).get();
+            if (activity == null || activity.isFinishing() || activity.isDestroyed()) {
+                resumedActivities.remove(i);
+                continue;
+            }
+            candidate = activity;
+            break;
+        }
+        resumedActivity = new WeakReference<>(candidate instanceof BrowserHost ? candidate : null);
+    }
+
+    private GeckoResult<Intent> startWebAuthnActivityForResult(PendingIntent pendingIntent) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            return GeckoResult.fromException(new IllegalStateException("WebAuthn activity request must run on the main thread"));
+        }
+        if (pendingIntent == null) {
+            return GeckoResult.fromException(new IllegalArgumentException("Missing WebAuthn PendingIntent"));
+        }
+        Activity activity = resumedActivity.get();
+        if (activity == null || !(activity instanceof BrowserHost)
+                || activity.isFinishing() || activity.isDestroyed()) {
+            return GeckoResult.fromException(new IllegalStateException("No active browser activity for WebAuthn"));
+        }
+        if (!pendingActivityResults.isEmpty()) {
+            return GeckoResult.fromException(new IllegalStateException("A WebAuthn request is already active"));
+        }
+        int requestCode = allocateWebAuthnRequestCode();
+        if (requestCode < 0) {
+            return GeckoResult.fromException(new IllegalStateException("Too many active WebAuthn requests"));
+        }
+        GeckoResult<Intent> result = new GeckoResult<>(main);
+        Runnable timeout = () -> {
+            PendingActivityResult pending = pendingActivityResults.remove(requestCode);
+            if (pending != null) {
+                pending.result.completeExceptionally(new IllegalStateException("WebAuthn activity timed out"));
+            }
+        };
+        pendingActivityResults.put(requestCode, new PendingActivityResult(result, timeout, activity));
+        main.postDelayed(timeout, ACTIVITY_RESULT_TIMEOUT_MS);
+        try {
+            activity.startIntentSenderForResult(
+                    pendingIntent.getIntentSender(), requestCode, null, 0, 0, 0);
+        } catch (IntentSender.SendIntentException | RuntimeException error) {
+            PendingActivityResult pending = pendingActivityResults.remove(requestCode);
+            main.removeCallbacks(timeout);
+            if (pending != null) {
+                pending.result.completeExceptionally(error);
+            }
+        }
+        return result;
+    }
+
+    private int allocateWebAuthnRequestCode() {
+        for (int i = 0; i < WEBAUTHN_REQUEST_CODE_COUNT; i++) {
+            int requestCode = nextWebAuthnRequestCode;
+            nextWebAuthnRequestCode++;
+            if (nextWebAuthnRequestCode >= WEBAUTHN_REQUEST_CODE_START + WEBAUTHN_REQUEST_CODE_COUNT) {
+                nextWebAuthnRequestCode = WEBAUTHN_REQUEST_CODE_START;
+            }
+            if (!pendingActivityResults.containsKey(requestCode)) {
+                return requestCode;
+            }
+        }
+        return -1;
+    }
+
+    public void handleWebAuthnActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode < WEBAUTHN_REQUEST_CODE_START
+                || requestCode >= WEBAUTHN_REQUEST_CODE_START + WEBAUTHN_REQUEST_CODE_COUNT) {
+            return;
+        }
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post(() -> handleWebAuthnActivityResult(requestCode, resultCode, data));
+            return;
+        }
+        PendingActivityResult pending = pendingActivityResults.remove(requestCode);
+        if (pending == null) {
+            return;
+        }
+        main.removeCallbacks(pending.timeout);
+        if (resultCode == Activity.RESULT_OK && data != null) {
+            pending.result.complete(data);
+        } else {
+            pending.result.completeExceptionally(new IntentSender.SendIntentException(
+                    resultCode == Activity.RESULT_OK
+                            ? "WebAuthn provider returned no result"
+                            : "WebAuthn request canceled"));
+        }
     }
 
     private void installCore() {

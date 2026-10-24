@@ -2,6 +2,10 @@ package com.coara.browser2.gecko;
 
 import android.graphics.Bitmap;
 
+import org.json.JSONObject;
+
+import org.mozilla.geckoview.MediaSession;
+
 public interface BrowserClient {
     final class ContextHit {
         public static final int TYPE_NONE = 0;
@@ -85,6 +89,19 @@ public interface BrowserClient {
     default void onFullScreenChanged(BrowserView view, boolean fullScreen) {
     }
 
+    default void onPictureInPictureRequested(BrowserView view, String placementToken) {
+    }
+
+    default void onPictureInPictureClosed(BrowserView view) {
+    }
+
+    default void onMediaPlaybackChanged(BrowserView view, MediaSession mediaSession, boolean playing,
+                                        boolean stopped, String title, String artist) {
+    }
+
+    default void onMediaMetadataChanged(BrowserView view, MediaSession mediaSession, String title, String artist) {
+    }
+
     default boolean onContextMenu(BrowserView view, ContextHit hit) {
         return false;
     }
@@ -111,5 +128,11 @@ public interface BrowserClient {
     }
 
     default void onSecurityChanged(BrowserView view, boolean secure) {
+    }
+
+    default void onCustomTabsAgentReady(BrowserView view) {
+    }
+
+    default void onCustomTabsMessage(BrowserView view, JSONObject message) {
     }
 }

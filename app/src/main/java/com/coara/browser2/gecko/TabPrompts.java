@@ -23,6 +23,8 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
 import java.util.Locale;
+import java.net.URI;
+import java.net.URISyntaxException;
 
 final class TabPrompts implements GeckoSession.PromptDelegate {
     private final BrowserView view;
@@ -497,6 +499,70 @@ final class TabPrompts implements GeckoSession.PromptDelegate {
                     }
                 })
                 .show();
+        return slot.result;
+    }
+
+    @Override
+    public GeckoResult<PromptResponse> onWebAuthnRelatedOriginPrompt(
+            GeckoSession session, final WebAuthnRelatedOriginPrompt prompt) {
+        Activity a = activity();
+        String origin = nz(prompt.origin);
+        String rpId = nz(prompt.rpId);
+        URI parsedOrigin;
+        try {
+            parsedOrigin = new URI(origin);
+        } catch (URISyntaxException | IllegalArgumentException error) {
+            return GeckoResult.fromValue(prompt.confirm(AllowOrDeny.DENY));
+        }
+        String scheme = parsedOrigin.getScheme();
+        String path = parsedOrigin.getRawPath();
+        String originHost = parsedOrigin.getHost();
+        int originPort = parsedOrigin.getPort();
+        String expectedAuthority = originHost == null ? "" : originHost + (originPort == 443 ? ":443" : "");
+        boolean secureOrigin = origin.length() <= 2048
+                && scheme != null && "https".equalsIgnoreCase(scheme)
+                && originHost != null && !originHost.isEmpty() && !originHost.endsWith(".")
+                && parsedOrigin.getRawAuthority() != null
+                && parsedOrigin.getRawAuthority().equalsIgnoreCase(expectedAuthority)
+                && parsedOrigin.getRawUserInfo() == null
+                && parsedOrigin.getRawQuery() == null && parsedOrigin.getRawFragment() == null
+                && (path == null || path.isEmpty() || "/".equals(path))
+                && (originPort == -1 || originPort == 443)
+                && originHost.matches("(?i)(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*");
+        boolean validRpId = rpId.length() <= 253
+                && rpId.matches("(?i)(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*");
+        if (a == null || !secureOrigin || !validRpId) {
+            return GeckoResult.fromValue(prompt.confirm(AllowOrDeny.DENY));
+        }
+        String action = prompt.isCreate ? "作成" : "使用";
+        String message = "このサイトが、関連オリジンのパスキーを" + action + "しようとしています。\n\n"
+                + "要求元: " + origin + "\n"
+                + "RP ID: " + rpId + "\n\n"
+                + "この要求元と RP ID の両方を信頼できる場合のみ許可してください。";
+        final Slot<PromptResponse> slot = new Slot<>();
+        try {
+            new AlertDialog.Builder(a)
+                    .setTitle("パスキーの関連サイト確認")
+                    .setMessage(message)
+                    .setPositiveButton("許可", (dialog, which) -> {
+                        if (!slot.done) {
+                            slot.finish(prompt.confirm(AllowOrDeny.ALLOW));
+                        }
+                    })
+                    .setNegativeButton("拒否", (dialog, which) -> {
+                        if (!slot.done) {
+                            slot.finish(prompt.confirm(AllowOrDeny.DENY));
+                        }
+                    })
+                    .setOnCancelListener(dialog -> {
+                        if (!slot.done) {
+                            slot.finish(prompt.confirm(AllowOrDeny.DENY));
+                        }
+                    })
+                    .show();
+        } catch (RuntimeException error) {
+            return GeckoResult.fromValue(prompt.confirm(AllowOrDeny.DENY));
+        }
         return slot.result;
     }
 
