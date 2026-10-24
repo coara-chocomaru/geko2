@@ -314,6 +314,11 @@ public final class CustomTabsService extends androidx.browser.customtabs.CustomT
     }
 
     @Override
+    protected boolean receiveFile(CustomTabsSessionToken sessionToken, Uri uri, int purpose, Bundle extras) {
+        return false;
+    }
+
+    @Override
     protected boolean cleanUpSession(CustomTabsSessionToken sessionToken) {
         if (sessionToken == null) {
             return false;
