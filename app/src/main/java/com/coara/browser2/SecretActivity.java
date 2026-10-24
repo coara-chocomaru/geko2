@@ -648,6 +648,16 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     }
 
     @Override
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        boolean enabled = pref != null && pref.getBoolean("picture_in_picture_enabled", false);
+        BrowserView current = getCurrentWebView();
+        if (enabled && !isFinishing() && current != null && current.isMediaPlaying()) {
+            current.requestPictureInPicture();
+        }
+    }
+
+    @Override
     protected void onPause() {
         if (networkStateGuard != null) {
             networkStateGuard.stop();
@@ -684,9 +694,14 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         if (current != null) {
             TouchpadController.clearCurrentWebView(current);
             webViewContainer.removeView(current);
+            boolean preserveMedia = !isChangingConfigurations() && current.shouldPreserveForBackgroundPlayback();
             try {
-                current.stopLoading();
-                current.destroy();
+                if (preserveMedia) {
+                    current.destroyPreservingBackgroundPlayback();
+                } else {
+                    current.stopLoading();
+                    current.destroy();
+                }
             } catch (Exception ignored) {
             }
             webView = null;
@@ -1175,6 +1190,18 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             public void onPictureInPictureClosed(BrowserView view) {
                 com.coara.browser2.MediaPipActivity.closeForSource(view);
                 view.setPictureInPictureActive(false);
+            }
+
+            @Override
+            public void onMediaSessionActivated(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession,
+                                                String title, String artist) {
+                com.coara.browser2.MediaPlaybackService.onSessionActivated(
+                        SecretActivity.this, mediaSession, "プライベート再生", "Coara Gecko");
+            }
+
+            @Override
+            public void onMediaSessionDeactivated(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession) {
+                com.coara.browser2.MediaPlaybackService.onSessionDeactivated(SecretActivity.this, mediaSession);
             }
 
             @Override

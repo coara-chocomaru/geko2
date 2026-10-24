@@ -1351,11 +1351,11 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     @Override
     protected void onUserLeaveHint() {
         super.onUserLeaveHint();
-        if (redirectingCustomTabLaunch || !isPictureInPictureEnabled() || isCustomTabMode()) {
+        if (redirectingCustomTabLaunch || !isPictureInPictureEnabled() || isFinishing()) {
             return;
         }
         BrowserView current = getCurrentWebView();
-        if (current != null && current.hasActiveMediaPlayback()) {
+        if (current != null && current.isMediaPlaying()) {
             current.requestPictureInPicture();
         }
     }
@@ -1427,7 +1427,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         if (!webViews.isEmpty() && currentTabIndex >= 0 && currentTabIndex < webViews.size()) {
             TouchpadController.clearCurrentWebView(webViews.get(currentTabIndex));
         }
-        releaseAllWebViews(isFinishing());
+        releaseAllWebViews(!isChangingConfigurations());
         clearBackgroundBitmap();
         backgroundExecutor.shutdown();
         faviconExecutor.shutdown();
@@ -1603,7 +1603,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         }
     }
 
-    private void releaseAllWebViews(boolean preservePictureInPicture) {
+    private void releaseAllWebViews(boolean preserveBackgroundMedia) {
         synchronized (webViews) {
             ArrayList<BrowserView> tabsToRelease = new ArrayList<>(webViews);
             webViews.clear();
@@ -1614,12 +1614,12 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 pendingTabs.remove(tab);
                 tabHistoryStates.remove(tab);
                 backNavigationTabs.remove(tab);
-                if (preservePictureInPicture
-                        && com.coara.browser2.MediaPipActivity.retainSourceUntilClosed(tab)) {
-                    continue;
-                }
-                if (preservePictureInPicture
-                        && com.coara.browser2.MediaPlaybackService.retainViewUntilStopped(tab)) {
+                boolean preserve = preserveBackgroundMedia && tab.shouldPreserveForBackgroundPlayback();
+                if (preserve) {
+                    try {
+                        tab.destroyPreservingBackgroundPlayback();
+                    } catch (Exception ignored) {
+                    }
                     continue;
                 }
                 try {
@@ -2498,6 +2498,18 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             public void onPictureInPictureClosed(BrowserView view) {
                 com.coara.browser2.MediaPipActivity.closeForSource(view);
                 view.setPictureInPictureActive(false);
+            }
+
+            @Override
+            public void onMediaSessionActivated(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession,
+                                                String title, String artist) {
+                com.coara.browser2.MediaPlaybackService.onSessionActivated(
+                        MainActivity.this, mediaSession, title, artist);
+            }
+
+            @Override
+            public void onMediaSessionDeactivated(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession) {
+                com.coara.browser2.MediaPlaybackService.onSessionDeactivated(MainActivity.this, mediaSession);
             }
 
             @Override

@@ -28,12 +28,12 @@ public final class MediaPipActivity extends Activity {
     private static final String EXTRA_PLACEMENT_TOKEN = "pip_placement_token";
     private static WeakReference<MediaPipActivity> activeActivity = new WeakReference<>(null);
     private static WeakReference<BrowserView> pendingSource = new WeakReference<>(null);
-    private BrowserView sourceView;
+    private WeakReference<BrowserView> sourceView = new WeakReference<>(null);
+    private GeckoSession sourceSession;
     private GeckoView pipView;
     private GeckoSession pipSession;
     private boolean enteredPip;
     private boolean closing;
-    private boolean destroySourceAfterClose;
 
     public static boolean launch(Context context, BrowserView source, String placementToken) {
         if (context == null || source == null || placementToken == null || placementToken.isEmpty()
@@ -60,19 +60,21 @@ public final class MediaPipActivity extends Activity {
 
     public static void closeForSource(BrowserView source) {
         MediaPipActivity activity = activeActivity.get();
-        if (activity != null && activity.sourceView == source) {
-            activity.destroySourceAfterClose = false;
+        if (activity != null && activity.isSource(source)) {
             activity.finishAndClose();
         }
     }
 
-    public static boolean retainSourceUntilClosed(BrowserView source) {
+    public static void closeForSession(GeckoSession session) {
         MediaPipActivity activity = activeActivity.get();
-        if (activity != null && activity.sourceView == source && !activity.closing) {
-            activity.destroySourceAfterClose = true;
-            return true;
+        if (activity != null && session != null && activity.sourceSession == session) {
+            activity.runOnUiThread(activity::finishAndClose);
         }
-        return false;
+    }
+
+    private boolean isSource(BrowserView source) {
+        return source != null && (sourceView.get() == source
+                || (sourceSession != null && source.getGeckoSession() == sourceSession));
     }
 
     public static void closeActive() {
@@ -91,9 +93,15 @@ public final class MediaPipActivity extends Activity {
             finishAndClose();
             return;
         }
-        sourceView = pendingSource.get();
+        BrowserView source = pendingSource.get();
         pendingSource = new WeakReference<>(null);
-        if (sourceView == null) {
+        if (source == null) {
+            finishAndClose();
+            return;
+        }
+        sourceView = new WeakReference<>(source);
+        sourceSession = source.getGeckoSession();
+        if (sourceSession == null) {
             finishAndClose();
             return;
         }
@@ -124,8 +132,6 @@ public final class MediaPipActivity extends Activity {
                 }
             });
             pipSession.open(BrowserEngine.get().getRuntime());
-            pipSession.setActive(true);
-            pipSession.setPriorityHint(GeckoSession.PRIORITY_HIGH);
             pipView.setSession(pipSession);
             pipSession.getSessionPictureInPicture().setKeepActive(true);
             PictureInPictureParams params = new PictureInPictureParams.Builder()
@@ -195,11 +201,6 @@ public final class MediaPipActivity extends Activity {
                 session.getSessionPictureInPicture().exit();
             } catch (Throwable ignored) {
             }
-            try {
-                session.setActive(false);
-                session.setPriorityHint(GeckoSession.PRIORITY_DEFAULT);
-            } catch (Throwable ignored) {
-            }
             if (pipView != null) {
                 try {
                     pipView.releaseSession();
@@ -211,22 +212,38 @@ public final class MediaPipActivity extends Activity {
             } catch (Throwable ignored) {
             }
         }
-        BrowserView sourceToDestroy = sourceView;
-        if (sourceToDestroy != null) {
-            sourceToDestroy.setPictureInPictureActive(false);
-            sourceView = null;
+        BrowserView source = sourceView.get();
+        GeckoSession originalSession = sourceSession;
+        sourceView = new WeakReference<>(null);
+        sourceSession = null;
+        boolean retainForBackgroundAudio = originalSession != null
+                && MediaPlaybackService.isRetainedSessionPlaying(originalSession);
+        if (originalSession != null) {
+            try {
+                originalSession.getSessionPictureInPicture().exit();
+            } catch (Throwable ignored) {
+            }
+        }
+        boolean sourceStillAttached = source != null && originalSession != null
+                && source.getGeckoSession() == originalSession;
+        if (sourceStillAttached) {
+            source.setPictureInPictureActive(false);
+        } else if (originalSession != null && !retainForBackgroundAudio) {
+            try {
+                originalSession.getSessionPictureInPicture().setKeepActive(false);
+            } catch (Throwable ignored) {
+            }
+            try {
+                originalSession.setActive(false);
+            } catch (Throwable ignored) {
+            }
+            MediaPlaybackService.onPipClosed(originalSession);
         }
         if (activeActivity.get() == this) {
             activeActivity = new WeakReference<>(null);
         }
         if (!isFinishing()) {
             finish();
-        }
-        if (destroySourceAfterClose && sourceToDestroy != null && !sourceToDestroy.isDestroyed()) {
-            try {
-                sourceToDestroy.destroy();
-            } catch (Throwable ignored) {
-            }
         }
     }
 
