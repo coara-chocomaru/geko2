@@ -64,6 +64,14 @@ public final class MediaPipActivity extends Activity {
         }
     }
 
+    public static void closeActive() {
+        MediaPipActivity activity = activeActivity.get();
+        if (activity != null) {
+            activity.runOnUiThread(activity::finishAndClose);
+        }
+        pendingSource = new WeakReference<>(null);
+    }
+
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);

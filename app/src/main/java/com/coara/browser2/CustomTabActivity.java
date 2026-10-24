@@ -49,6 +49,7 @@ public final class CustomTabActivity extends MainActivity {
     private static final int MENU_OPEN_BROWSER = 0x710003;
     private static final int MENU_CLOSE = 0x710004;
     private static final int MENU_ACTION_BUTTON = 0x710005;
+    private static final int MENU_COPY_URL = 0x710006;
     private static final int MENU_CUSTOM_BASE = 0x711000;
     private static final int MAX_CUSTOM_ITEMS = 5;
     private static final Object ACTIVE_LOCK = new Object();
@@ -88,7 +89,11 @@ public final class CustomTabActivity extends MainActivity {
 
     @Override
     protected boolean shouldRunCustomTabForIntent(Intent intent) {
-        return customTabsIntentRecognized || hasCustomTabsIntentExtras(intent);
+        if (customTabsIntentRecognized || hasCustomTabsIntentExtras(intent)) {
+            return true;
+        }
+        return intent != null && Intent.ACTION_VIEW.equals(intent.getAction())
+                && isAllowedUrl(intent.getData());
     }
 
     private boolean hasCustomTabsIntentExtras(Intent intent) {
@@ -333,11 +338,12 @@ public final class CustomTabActivity extends MainActivity {
             }
         }
         menu.add(Menu.NONE, MENU_RELOAD, 100, "再読み込み");
+        menu.add(Menu.NONE, MENU_COPY_URL, 101, "URLをコピー");
         if (shareEnabled) {
-            menu.add(Menu.NONE, MENU_SHARE, 101, "共有");
+            menu.add(Menu.NONE, MENU_SHARE, 102, "共有");
         }
-        menu.add(Menu.NONE, MENU_OPEN_BROWSER, 102, "通常ブラウザで開く");
-        menu.add(Menu.NONE, MENU_CLOSE, 103, "閉じる");
+        menu.add(Menu.NONE, MENU_OPEN_BROWSER, 103, "通常ブラウザで開く");
+        menu.add(Menu.NONE, MENU_CLOSE, 104, "閉じる");
         return true;
     }
 
@@ -353,6 +359,18 @@ public final class CustomTabActivity extends MainActivity {
             BrowserView view = getCustomTabBrowserView();
             if (view != null) {
                 view.reload();
+            }
+            return true;
+        }
+        if (id == MENU_COPY_URL) {
+            BrowserView view = getCustomTabBrowserView();
+            String url = view == null ? null : view.getUrl();
+            if (url != null && isAllowedUrl(Uri.parse(url))) {
+                android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (clipboard != null) {
+                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("URL", url));
+                    Toast.makeText(this, "URLをコピーしました", Toast.LENGTH_SHORT).show();
+                }
             }
             return true;
         }
@@ -715,7 +733,8 @@ public final class CustomTabActivity extends MainActivity {
         actionButtonBundle = CustomTabsService.sanitizeActionButton(safeIntent.getBundleExtra(CustomTabsIntent.EXTRA_ACTION_BUTTON_BUNDLE));
         toolbarColor = safeIntent.getIntExtra(CustomTabsIntent.EXTRA_TOOLBAR_COLOR, getColorCompat(R.color.colorPrimary));
         titleVisibility = safeIntent.getIntExtra(CustomTabsIntent.EXTRA_TITLE_VISIBILITY_STATE, CustomTabsIntent.NO_TITLE);
-        shareEnabled = safeIntent.getIntExtra(CustomTabsIntent.EXTRA_SHARE_STATE, CustomTabsIntent.SHARE_STATE_DEFAULT)
+        shareEnabled = customTabsIntentRecognized
+                && safeIntent.getIntExtra(CustomTabsIntent.EXTRA_SHARE_STATE, CustomTabsIntent.SHARE_STATE_DEFAULT)
                 != CustomTabsIntent.SHARE_STATE_OFF;
         scrollHidingEnabled = safeIntent.getBooleanExtra(CustomTabsIntent.EXTRA_ENABLE_URLBAR_HIDING, false);
         tintActionButton = safeIntent.getBooleanExtra(CustomTabsIntent.EXTRA_TINT_ACTION_BUTTON, false);

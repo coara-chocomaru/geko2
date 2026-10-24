@@ -160,6 +160,11 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     private ImageView clearButton;
     private ImageView urlSecurityIcon;
     private android.widget.ProgressBar pageProgressBar;
+    private final Runnable hidePageProgressRunnable = () -> {
+        if (pageProgressBar != null && !isFinishing()) {
+            pageProgressBar.setVisibility(View.INVISIBLE);
+        }
+    };
     private ActivityResultLauncher<Intent> fileChooserLauncher;
     private ValueCallback<Uri[]> filePathCallback;
     private ActivityResultLauncher<String> permissionLauncher;
@@ -279,6 +284,11 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         ViewGroup parentView = (ViewGroup) urlEditText.getParent();
         urlSecurityIcon = findViewById(R.id.urlSecurityIcon);
         pageProgressBar = findViewById(R.id.pageProgressBar);
+        if (pageProgressBar != null) {
+            pageProgressBar.setMax(100);
+            pageProgressBar.setProgress(0);
+            pageProgressBar.setVisibility(View.INVISIBLE);
+        }
         int buttonSize = Math.round(36 * getResources().getDisplayMetrics().density);
         int buttonPad = Math.round(8 * getResources().getDisplayMetrics().density);
         android.util.TypedValue ripple = new android.util.TypedValue();
@@ -657,6 +667,7 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
 
     @Override
     protected void onDestroy() {
+        UiThread.mainHandler().removeCallbacks(hidePageProgressRunnable);
         PageTranslator.release();
         if (findController != null) {
             findController.release();
@@ -1000,6 +1011,7 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         webView.setClient(new BrowserClient() {
             @Override
             public void onLoadFailed(BrowserView view, LoadFailure failure) {
+                updatePageLoadProgress(view, 100, true);
                 if (view == getCurrentWebView() && SafeBrowsingSupport.handles(failure)) {
                     UiThread.mainHandler().post(() -> SafeBrowsingSupport.show(SecretActivity.this, view, failure,
                             () -> navigateBackFromError(view)));
@@ -1026,6 +1038,9 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
 
             @Override
             public void onPageStarted(BrowserView view, String url) {
+                if (view == getCurrentWebView()) {
+                    updatePageLoadProgress(view, 0, false);
+                }
                 PageTranslator.onPageStarted(view);
                 ExternalDownloadTabTracker.onPageStarted(view, url);
                 PluginRuntime.onPageStarted(view, url);
@@ -1037,6 +1052,15 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                 clearPendingSpaHistory(view);
                 urlEditText.setText(url);
                 updateUrlSecurityIcon();
+            }
+
+            @Override
+            public void onProgressChanged(BrowserView view, int progress) {
+                if (progress >= 100 && !view.isLoading()) {
+                    updatePageLoadProgress(view, 100, true);
+                } else {
+                    updatePageLoadProgress(view, progress, false);
+                }
             }
 
             @Override
@@ -1059,6 +1083,7 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
 
             @Override
             public void onPageFinished(BrowserView view, String url) {
+                updatePageLoadProgress(view, 100, true);
                 if (url == null) {
                     url = "";
                 }
@@ -1136,6 +1161,10 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
 
             @Override
             public void onPictureInPictureRequested(BrowserView view, String placementToken) {
+                if (!pref.getBoolean("picture_in_picture_enabled", false)) {
+                    view.rejectPictureInPictureRequest();
+                    return;
+                }
                 if (!com.coara.browser2.MediaPipActivity.launch(SecretActivity.this, view, placementToken)) {
                     view.setPictureInPictureActive(false);
                 }
@@ -1669,12 +1698,35 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             adBlockItem.setChecked(AdBlockEngine.isEnabled());
             adBlockItem.setTitle(AdBlockEngine.menuTitle());
         }
+        MenuItem pictureInPictureItem = menu.findItem(R.id.action_picture_in_picture);
+        if (pictureInPictureItem != null) {
+            boolean supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    && getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE);
+            boolean enabled = pref != null && pref.getBoolean("picture_in_picture_enabled", false);
+            pictureInPictureItem.setCheckable(true);
+            pictureInPictureItem.setChecked(enabled);
+            pictureInPictureItem.setEnabled(supported);
+            pictureInPictureItem.setTitle(enabled ? "小窓再生 (PiP) ON" : "小窓再生 (PiP) OFF");
+        }
         return super.onPrepareOptionsMenu(menu);
     }
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         int id = item.getItemId();
-        if (id == R.id.action_dark_mode) {
+        if (id == R.id.action_picture_in_picture) {
+            boolean enabled = pref != null && pref.getBoolean("picture_in_picture_enabled", false);
+            enabled = !enabled;
+            if (pref != null) {
+                pref.edit().putBoolean("picture_in_picture_enabled", enabled).apply();
+            }
+            if (!enabled) {
+                com.coara.browser2.MediaPipActivity.closeActive();
+            }
+            item.setChecked(enabled);
+            invalidateOptionsMenu();
+            Toast.makeText(this, enabled ? "小窓再生を有効にしました" : "小窓再生を無効にしました", Toast.LENGTH_SHORT).show();
+            return true;
+        } else if (id == R.id.action_dark_mode) {
             darkModeEnabled = !darkModeEnabled;
             item.setChecked(darkModeEnabled);
             pref.edit().putBoolean(KEY_DARK_MODE, darkModeEnabled).apply();
@@ -1854,6 +1906,21 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             } else {
                 current.reload();
             }
+        }
+    }
+
+    private void updatePageLoadProgress(BrowserView view, int progress, boolean complete) {
+        if (view == null || view != getCurrentWebView() || pageProgressBar == null) {
+            return;
+        }
+        Handler handler = UiThread.mainHandler();
+        handler.removeCallbacks(hidePageProgressRunnable);
+        if (complete) {
+            pageProgressBar.setProgress(100);
+            handler.postDelayed(hidePageProgressRunnable, 180L);
+        } else {
+            pageProgressBar.setVisibility(View.VISIBLE);
+            pageProgressBar.setProgress(Math.max(0, Math.min(100, progress)));
         }
     }
 

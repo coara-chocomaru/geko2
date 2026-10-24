@@ -172,6 +172,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private static final String KEY_IMG_BLOCK_ENABLED = BrowserConstants.KEY_IMG_BLOCK_ENABLED;
     private static final String KEY_UA_ENABLED = BrowserConstants.KEY_UA_ENABLED;
     private static final String KEY_DESKUA_ENABLED = BrowserConstants.KEY_DESKUA_ENABLED;
+    private static final String KEY_PICTURE_IN_PICTURE_ENABLED = "picture_in_picture_enabled";
     private static final String KEY_TABS = BrowserConstants.KEY_TABS;
     private static final String KEY_CURRENT_TAB = BrowserConstants.KEY_CURRENT_TAB;
     private static final String KEY_BOOKMARKS = BrowserConstants.KEY_BOOKMARKS;
@@ -206,6 +207,11 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private ImageView clearButton;
     private ImageView urlSecurityIcon;
     private android.widget.ProgressBar pageProgressBar;
+    private final Runnable hidePageProgressRunnable = () -> {
+        if (pageProgressBar != null && !isFinishing()) {
+            pageProgressBar.setVisibility(View.INVISIBLE);
+        }
+    };
     private ImageView backgroundImageView;
     private volatile int backgroundLoadToken = 0;
     private ActivityResultLauncher<Intent> fileChooserLauncher;
@@ -472,6 +478,11 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         ViewGroup parentView = (ViewGroup) urlEditText.getParent();
         urlSecurityIcon = findViewById(R.id.urlSecurityIcon);
         pageProgressBar = findViewById(R.id.pageProgressBar);
+        if (pageProgressBar != null) {
+            pageProgressBar.setMax(100);
+            pageProgressBar.setProgress(0);
+            pageProgressBar.setVisibility(View.INVISIBLE);
+        }
         int buttonSize = Math.round(36 * getResources().getDisplayMetrics().density);
         int buttonPad = Math.round(8 * getResources().getDisplayMetrics().density);
         android.util.TypedValue ripple = new android.util.TypedValue();
@@ -1377,6 +1388,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
     @Override
     protected void onDestroy() {
+        UiThread.mainHandler().removeCallbacks(hidePageProgressRunnable);
         if (redirectingCustomTabLaunch) {
             super.onDestroy();
             return;
@@ -2225,6 +2237,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 TouchpadController.onPageStarted(view);
                 clearPendingSpaHistory(view);
                 if (view == getCurrentWebView()) {
+                    updatePageLoadProgress(view, 0, false);
                     urlEditText.setText(url);
                     updatePullToRefreshState(view, url);
                     showCachedFavicon(url);
@@ -2232,6 +2245,15 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     if (isCustomTabMode()) {
                         onCustomTabPageStarted(view);
                     }
+                }
+            }
+
+            @Override
+            public void onProgressChanged(BrowserView view, int progress) {
+                if (progress >= 100 && !view.isLoading()) {
+                    updatePageLoadProgress(view, 100, true);
+                } else {
+                    updatePageLoadProgress(view, progress, false);
                 }
             }
 
@@ -2260,6 +2282,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
             @Override
             public void onPageFinished(BrowserView view, String url) {
+                updatePageLoadProgress(view, 100, true);
                 if (url == null) {
                     url = "";
                 }
@@ -2309,6 +2332,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
             @Override
             public void onLoadFailed(BrowserView view, LoadFailure failure) {
+                updatePageLoadProgress(view, 100, true);
                 if (isCustomTabMode() && view == getCurrentWebView()) {
                     onCustomTabPageFailed(view);
                 }
@@ -2438,6 +2462,10 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
             @Override
             public void onPictureInPictureRequested(BrowserView view, String placementToken) {
+                if (!isPictureInPictureEnabled()) {
+                    view.rejectPictureInPictureRequest();
+                    return;
+                }
                 if (!com.coara.browser2.MediaPipActivity.launch(MainActivity.this, view, placementToken)) {
                     view.setPictureInPictureActive(false);
                 }
@@ -3799,7 +3827,10 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         if (findController != null) {
             findController.onTabSwitched(current);
         }
-        if (pageProgressBar != null) {
+        if (next.isLoading()) {
+            updatePageLoadProgress(next, next.getProgress(), false);
+        } else if (pageProgressBar != null) {
+            UiThread.mainHandler().removeCallbacks(hidePageProgressRunnable);
             pageProgressBar.setVisibility(View.INVISIBLE);
         }
         try {
@@ -4005,6 +4036,16 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     && BrowserVisualSettings.isOffscreenPreRasterEnabled(pref));
             offscreenPreRasterItem.setEnabled(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M);
         }
+        MenuItem pictureInPictureItem = menu.findItem(R.id.action_picture_in_picture);
+        if (pictureInPictureItem != null) {
+            boolean supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    && getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE);
+            boolean enabled = isPictureInPictureEnabled();
+            pictureInPictureItem.setCheckable(true);
+            pictureInPictureItem.setChecked(enabled);
+            pictureInPictureItem.setEnabled(supported);
+            pictureInPictureItem.setTitle(enabled ? "小窓再生 (PiP) ON" : "小窓再生 (PiP) OFF");
+        }
         boolean prepared = super.onPrepareOptionsMenu(menu);
         BrowserMenuController.prepare(this, menu);
         return prepared;
@@ -4013,7 +4054,10 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     @SuppressWarnings("deprecation")
     public boolean onOptionsItemSelected(MenuItem item) {
         int id = item.getItemId();
-        if (id == R.id.action_tabs) {
+        if (id == R.id.action_picture_in_picture) {
+            togglePictureInPicture(item);
+            return true;
+        } else if (id == R.id.action_tabs) {
             showTabsDialog();
         } else if (id == R.id.action_adblock) {
             toggleAdBlock(item);
@@ -4234,6 +4278,45 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             } else {
                 current.reload();
             }
+        }
+    }
+
+    protected final boolean isPictureInPictureEnabled() {
+        return pref != null && pref.getBoolean(KEY_PICTURE_IN_PICTURE_ENABLED, false);
+    }
+
+    protected final void togglePictureInPictureSetting() {
+        if (pref == null) {
+            return;
+        }
+        boolean enabled = !isPictureInPictureEnabled();
+        pref.edit().putBoolean(KEY_PICTURE_IN_PICTURE_ENABLED, enabled).apply();
+        if (!enabled) {
+            com.coara.browser2.MediaPipActivity.closeActive();
+        }
+        invalidateOptionsMenu();
+        Toast.makeText(this, enabled ? "小窓再生を有効にしました" : "小窓再生を無効にしました", Toast.LENGTH_SHORT).show();
+    }
+
+    private void togglePictureInPicture(MenuItem item) {
+        togglePictureInPictureSetting();
+        if (item != null) {
+            item.setChecked(isPictureInPictureEnabled());
+        }
+    }
+
+    private void updatePageLoadProgress(BrowserView view, int progress, boolean complete) {
+        if (isCustomTabMode() || view == null || view != getCurrentWebView() || pageProgressBar == null) {
+            return;
+        }
+        android.os.Handler handler = UiThread.mainHandler();
+        handler.removeCallbacks(hidePageProgressRunnable);
+        if (complete) {
+            pageProgressBar.setProgress(100);
+            handler.postDelayed(hidePageProgressRunnable, 180L);
+        } else {
+            pageProgressBar.setVisibility(View.VISIBLE);
+            pageProgressBar.setProgress(Math.max(0, Math.min(100, progress)));
         }
     }
 
