@@ -368,20 +368,39 @@ public class FxExtensionsActivity extends AppCompatActivity implements FxExtensi
     }
 
     private void handleIntent(Intent intent) {
-        if (intent == null) {
+        if (intent == null || !Intent.ACTION_VIEW.equals(intent.getAction()) || intent.getData() == null) {
             return;
         }
-        if (Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null) {
-            Uri data = intent.getData();
-            intent.setData(null);
-            String scheme = data.getScheme() == null ? "" : data.getScheme().toLowerCase(Locale.ROOT);
-            if (scheme.equals("http") || scheme.equals("https")) {
-                installUrl(data.toString());
-            } else {
-                installUri(data);
-            }
-            selectTab(TAB_INSTALLED);
+        Uri data = intent.getData();
+        intent.setData(null);
+        String scheme = data.getScheme() == null ? "" : data.getScheme().toLowerCase(Locale.ROOT);
+        if (!scheme.equals("http") && !scheme.equals("https")
+                && !scheme.equals("content") && !scheme.equals("file")) {
+            Toast.makeText(this, "この形式の拡張機能は追加できません", Toast.LENGTH_LONG).show();
+            return;
         }
+        String source = scheme.equals("http") || scheme.equals("https")
+                ? data.getHost() : "選択された拡張機能ファイル";
+        if (source == null || source.isEmpty()) {
+            source = "提供元を確認できません";
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("拡張機能の追加を確認")
+                .setMessage("外部アプリから拡張機能の追加要求を受け取りました。\n提供元: " + source
+                        + "\n\n拡張機能は閲覧中のページの情報にアクセスできる場合があります。信頼できる提供元のものだけ追加してください。")
+                .setPositiveButton("確認して追加", (dialog, which) -> {
+                    if (scheme.equals("http") || scheme.equals("https")) {
+                        installUrl(data.toString());
+                    } else {
+                        installUri(data);
+                    }
+                    selectTab(TAB_INSTALLED);
+                })
+                .setNegativeButton("キャンセル", (dialog, which) ->
+                        Toast.makeText(this, "拡張機能の追加をキャンセルしました", Toast.LENGTH_SHORT).show())
+                .setOnCancelListener(dialog ->
+                        Toast.makeText(this, "拡張機能の追加をキャンセルしました", Toast.LENGTH_SHORT).show())
+                .show();
     }
 
     private void askUrl() {
