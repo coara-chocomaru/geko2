@@ -94,6 +94,7 @@ tasks.withType(JavaCompile).configureEach {
 
 dependencies {
     implementation 'androidx.core:core:1.19.1'
+    implementation 'androidx.browser:browser:1.10.0'
     implementation 'androidx.startup:startup-runtime:1.2.0'
     implementation 'androidx.profileinstaller:profileinstaller:1.4.1'
     implementation 'io.noties.markwon:core:4.6.2'
