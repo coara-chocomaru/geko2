@@ -211,6 +211,8 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private final Runnable hidePageProgressRunnable = () -> {
         if (pageProgressBar != null && !isFinishing()) {
             pageProgressBar.setVisibility(View.INVISIBLE);
+            pageProgressBar.setIndeterminate(false);
+            pageProgressBar.setProgress(0);
         }
     };
     private ImageView backgroundImageView;
@@ -1347,6 +1349,18 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     }
 
     @Override
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        if (redirectingCustomTabLaunch || !isPictureInPictureEnabled() || isCustomTabMode()) {
+            return;
+        }
+        BrowserView current = getCurrentWebView();
+        if (current != null && current.hasActiveMediaPlayback()) {
+            current.requestPictureInPicture();
+        }
+    }
+
+    @Override
     protected void onPause() {
         if (redirectingCustomTabLaunch) {
             super.onPause();
@@ -1395,7 +1409,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             return;
         }
         com.coara.browser2.fx.FxExtensionManager.get().clearTabHost(fxTabHost);
-        PageTranslator.release();
+        PageTranslator.releaseForViews(new ArrayList<>(webViews));
         if (findController != null) {
             findController.release();
         }
@@ -1413,7 +1427,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         if (!webViews.isEmpty() && currentTabIndex >= 0 && currentTabIndex < webViews.size()) {
             TouchpadController.clearCurrentWebView(webViews.get(currentTabIndex));
         }
-        releaseAllWebViews();
+        releaseAllWebViews(isFinishing());
         clearBackgroundBitmap();
         backgroundExecutor.shutdown();
         faviconExecutor.shutdown();
@@ -1589,7 +1603,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         }
     }
 
-    private void releaseAllWebViews() {
+    private void releaseAllWebViews(boolean preservePictureInPicture) {
         synchronized (webViews) {
             ArrayList<BrowserView> tabsToRelease = new ArrayList<>(webViews);
             webViews.clear();
@@ -1600,6 +1614,14 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 pendingTabs.remove(tab);
                 tabHistoryStates.remove(tab);
                 backNavigationTabs.remove(tab);
+                if (preservePictureInPicture
+                        && com.coara.browser2.MediaPipActivity.retainSourceUntilClosed(tab)) {
+                    continue;
+                }
+                if (preservePictureInPicture
+                        && com.coara.browser2.MediaPlaybackService.retainViewUntilStopped(tab)) {
+                    continue;
+                }
                 try {
                     tab.stopLoading();
                 } catch (Exception ignored) {
@@ -2481,6 +2503,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             @Override
             public void onMediaPlaybackChanged(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession,
                                                boolean playing, boolean stopped, String title, String artist) {
+                if (playing) {
+                    com.coara.browser2.MediaPlaybackService.requestNotificationPermission(MainActivity.this);
+                }
                 com.coara.browser2.MediaPlaybackService.onPlaybackState(
                         MainActivity.this, mediaSession, playing, stopped, title, artist);
             }
@@ -4321,11 +4346,27 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         android.os.Handler handler = UiThread.mainHandler();
         handler.removeCallbacks(hidePageProgressRunnable);
         if (complete) {
-            pageProgressBar.setProgress(100);
-            handler.postDelayed(hidePageProgressRunnable, 180L);
-        } else {
             pageProgressBar.setVisibility(View.VISIBLE);
-            pageProgressBar.setProgress(Math.max(0, Math.min(100, progress)));
+            pageProgressBar.setIndeterminate(false);
+            pageProgressBar.setProgress(100, true);
+            handler.postDelayed(hidePageProgressRunnable, 240L);
+            return;
+        }
+        pageProgressBar.setVisibility(View.VISIBLE);
+        if (progress <= 0) {
+            pageProgressBar.setProgress(0);
+            pageProgressBar.setIndeterminate(true);
+            return;
+        }
+        if (pageProgressBar.isIndeterminate()) {
+            pageProgressBar.setIndeterminate(false);
+            pageProgressBar.setProgress(0);
+        }
+        int visibleProgress = Math.max(1, Math.min(96, progress));
+        if (visibleProgress > pageProgressBar.getProgress()) {
+            pageProgressBar.setProgress(visibleProgress, true);
+        } else if (visibleProgress < pageProgressBar.getProgress() && visibleProgress < 90) {
+            pageProgressBar.setProgress(visibleProgress);
         }
     }
 

@@ -1,26 +1,37 @@
 package com.coara.browser2;
 
+import android.Manifest;
+import android.app.Activity;
 import android.app.Notification;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.TextUtils;
 
 import androidx.annotation.Nullable;
+import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 
 import org.mozilla.geckoview.MediaSession;
+
+import com.coara.browser2.gecko.BrowserView;
+import com.coara.browser2.util.BrowserConstants;
 
 import java.lang.ref.WeakReference;
 
 public final class MediaPlaybackService extends Service {
     private static final String CHANNEL_ID = "coara_media_playback";
     private static final int NOTIFICATION_ID = 7402;
+    private static final int NOTIFICATION_PERMISSION_REQUEST = 7406;
+    private static final String NOTIFICATION_PERMISSION_ASKED = "media_notification_permission_asked";
     private static final String ACTION_UPDATE = "com.coara.browser2.media.UPDATE";
     private static final String ACTION_PLAY = "com.coara.browser2.media.PLAY";
     private static final String ACTION_PAUSE = "com.coara.browser2.media.PAUSE";
@@ -30,6 +41,7 @@ public final class MediaPlaybackService extends Service {
     private static String activeTitle = "メディア再生";
     private static String activeArtist = "Coara Gecko";
     private static boolean activePlaying;
+    private static BrowserView retainedBrowserView;
     private String title = activeTitle;
     private String artist = activeArtist;
     private boolean playing;
@@ -40,16 +52,65 @@ public final class MediaPlaybackService extends Service {
         }
     }
 
+    public static void requestNotificationPermission(Activity activity) {
+        if (activity == null || activity.isFinishing() || Build.VERSION.SDK_INT < 33
+                || ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        SharedPreferences preferences = activity.getSharedPreferences(BrowserConstants.PREF_NAME, Context.MODE_PRIVATE);
+        if (preferences.getBoolean(NOTIFICATION_PERMISSION_ASKED, false)) {
+            return;
+        }
+        preferences.edit().putBoolean(NOTIFICATION_PERMISSION_ASKED, true).apply();
+        activity.runOnUiThread(() -> {
+            if (!activity.isFinishing()
+                    && ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(activity,
+                        new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_PERMISSION_REQUEST);
+            }
+        });
+    }
+
+    public static void onViewDestroyed(BrowserView view) {
+        synchronized (LOCK) {
+            if (retainedBrowserView == view) {
+                retainedBrowserView = null;
+            }
+        }
+    }
+
+    public static boolean retainViewUntilStopped(BrowserView view) {
+        if (view == null || !view.canRetainForBackgroundPlayback()) {
+            return false;
+        }
+        synchronized (LOCK) {
+            MediaSession current = activeSession.get();
+            if (current == null || !view.ownsMediaSession(current)) {
+                return false;
+            }
+            retainedBrowserView = view;
+            return true;
+        }
+    }
+
     public static void onPlaybackState(Context context, MediaSession session, boolean isPlaying,
                                        boolean stopped, String mediaTitle, String mediaArtist) {
         if (context == null || session == null) {
             return;
         }
+        BrowserView viewToDestroy = null;
+        boolean stopService = false;
         synchronized (LOCK) {
             MediaSession current = activeSession.get();
             if (isPlaying) {
+                if (current != null && current != session && retainedBrowserView != null
+                        && !retainedBrowserView.ownsMediaSession(session)) {
+                    viewToDestroy = retainedBrowserView;
+                    retainedBrowserView = null;
+                }
                 activeSession = new WeakReference<>(session);
-                current = session;
                 activePlaying = true;
                 activeTitle = normalize(mediaTitle, "メディア再生");
                 activeArtist = normalize(mediaArtist, "Coara Gecko");
@@ -60,13 +121,28 @@ public final class MediaPlaybackService extends Service {
                 activePlaying = false;
                 activeTitle = "メディア再生";
                 activeArtist = "Coara Gecko";
-                context.stopService(new Intent(context, MediaPlaybackService.class));
-                return;
+                if (retainedBrowserView != null && retainedBrowserView.ownsMediaSession(session)) {
+                    viewToDestroy = retainedBrowserView;
+                    retainedBrowserView = null;
+                }
+                stopService = true;
             } else {
                 activePlaying = false;
                 activeTitle = normalize(mediaTitle, activeTitle);
                 activeArtist = normalize(mediaArtist, activeArtist);
             }
+        }
+        BrowserView retainedView = viewToDestroy;
+        if (retainedView != null) {
+            new Handler(Looper.getMainLooper()).post(() -> {
+                if (!retainedView.isDestroyed()) {
+                    retainedView.destroy();
+                }
+            });
+        }
+        if (stopService) {
+            context.stopService(new Intent(context, MediaPlaybackService.class));
+            return;
         }
         Intent intent = new Intent(context, MediaPlaybackService.class)
                 .setAction(ACTION_UPDATE)
@@ -147,11 +223,24 @@ public final class MediaPlaybackService extends Service {
                     playing = false;
                 } else {
                     session.stop();
+                    BrowserView retainedToDestroy = null;
                     synchronized (LOCK) {
                         if (activeSession.get() == session) {
                             activeSession = new WeakReference<>(null);
                             activePlaying = false;
                         }
+                        if (retainedBrowserView != null && retainedBrowserView.ownsMediaSession(session)) {
+                            retainedToDestroy = retainedBrowserView;
+                            retainedBrowserView = null;
+                        }
+                    }
+                    if (retainedToDestroy != null) {
+                        BrowserView retained = retainedToDestroy;
+                        new Handler(Looper.getMainLooper()).post(() -> {
+                            if (!retained.isDestroyed()) {
+                                retained.destroy();
+                            }
+                        });
                     }
                     stopForeground(STOP_FOREGROUND_REMOVE);
                     stopSelfResult(startId);
@@ -221,12 +310,6 @@ public final class MediaPlaybackService extends Service {
     @Override
     public void onDestroy() {
         stopForeground(STOP_FOREGROUND_REMOVE);
-        synchronized (LOCK) {
-            activeSession = new WeakReference<>(null);
-            activePlaying = false;
-            activeTitle = "メディア再生";
-            activeArtist = "Coara Gecko";
-        }
         super.onDestroy();
     }
 

@@ -33,6 +33,7 @@ public final class MediaPipActivity extends Activity {
     private GeckoSession pipSession;
     private boolean enteredPip;
     private boolean closing;
+    private boolean destroySourceAfterClose;
 
     public static boolean launch(Context context, BrowserView source, String placementToken) {
         if (context == null || source == null || placementToken == null || placementToken.isEmpty()
@@ -60,8 +61,18 @@ public final class MediaPipActivity extends Activity {
     public static void closeForSource(BrowserView source) {
         MediaPipActivity activity = activeActivity.get();
         if (activity != null && activity.sourceView == source) {
+            activity.destroySourceAfterClose = false;
             activity.finishAndClose();
         }
+    }
+
+    public static boolean retainSourceUntilClosed(BrowserView source) {
+        MediaPipActivity activity = activeActivity.get();
+        if (activity != null && activity.sourceView == source && !activity.closing) {
+            activity.destroySourceAfterClose = true;
+            return true;
+        }
+        return false;
     }
 
     public static void closeActive() {
@@ -113,6 +124,8 @@ public final class MediaPipActivity extends Activity {
                 }
             });
             pipSession.open(BrowserEngine.get().getRuntime());
+            pipSession.setActive(true);
+            pipSession.setPriorityHint(GeckoSession.PRIORITY_HIGH);
             pipView.setSession(pipSession);
             pipSession.getSessionPictureInPicture().setKeepActive(true);
             PictureInPictureParams params = new PictureInPictureParams.Builder()
@@ -182,6 +195,11 @@ public final class MediaPipActivity extends Activity {
                 session.getSessionPictureInPicture().exit();
             } catch (Throwable ignored) {
             }
+            try {
+                session.setActive(false);
+                session.setPriorityHint(GeckoSession.PRIORITY_DEFAULT);
+            } catch (Throwable ignored) {
+            }
             if (pipView != null) {
                 try {
                     pipView.releaseSession();
@@ -193,8 +211,9 @@ public final class MediaPipActivity extends Activity {
             } catch (Throwable ignored) {
             }
         }
-        if (sourceView != null) {
-            sourceView.setPictureInPictureActive(false);
+        BrowserView sourceToDestroy = sourceView;
+        if (sourceToDestroy != null) {
+            sourceToDestroy.setPictureInPictureActive(false);
             sourceView = null;
         }
         if (activeActivity.get() == this) {
@@ -202,6 +221,12 @@ public final class MediaPipActivity extends Activity {
         }
         if (!isFinishing()) {
             finish();
+        }
+        if (destroySourceAfterClose && sourceToDestroy != null && !sourceToDestroy.isDestroyed()) {
+            try {
+                sourceToDestroy.destroy();
+            } catch (Throwable ignored) {
+            }
         }
     }
 

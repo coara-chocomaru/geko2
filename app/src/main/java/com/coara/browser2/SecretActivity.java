@@ -669,7 +669,7 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     @Override
     protected void onDestroy() {
         UiThread.mainHandler().removeCallbacks(hidePageProgressRunnable);
-        PageTranslator.release();
+        PageTranslator.releaseForView(getCurrentWebView());
         if (findController != null) {
             findController.release();
         }
@@ -1180,6 +1180,9 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             @Override
             public void onMediaPlaybackChanged(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession,
                                                boolean playing, boolean stopped, String title, String artist) {
+                if (playing) {
+                    com.coara.browser2.MediaPlaybackService.requestNotificationPermission(SecretActivity.this);
+                }
                 com.coara.browser2.MediaPlaybackService.onPlaybackState(
                         SecretActivity.this, mediaSession, playing, stopped, "プライベート再生", "Coara Gecko");
             }
