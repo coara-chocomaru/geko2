@@ -217,7 +217,6 @@ public class BrowserView extends GeckoView {
         return new GeckoSessionSettings.Builder()
                 .usePrivateMode(privateMode)
                 .allowJavascript(settings.getJavaScriptEnabled())
-                .useTrackingProtection(true)
                 .userAgentMode(settings.isDesktopMode() ? GeckoSessionSettings.USER_AGENT_MODE_DESKTOP : GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
                 .viewportMode(settings.isDesktopMode() ? GeckoSessionSettings.VIEWPORT_MODE_DESKTOP : GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
                 .userAgentOverride(settings.getUserAgentOverride())
@@ -264,6 +263,7 @@ public class BrowserView extends GeckoView {
         setSession(session);
         session.getCompositorController().setClearColor(clearColor);
         session.setActive(!paused);
+        session.setPriorityHint(paused ? GeckoSession.PRIORITY_DEFAULT : GeckoSession.PRIORITY_HIGH);
         com.coara.browser2.fx.FxExtensionManager.get().onSessionAttached(session, !paused);
         final GeckoSession target = session;
         BrowserEngine.get().whenAgentSettled(new Runnable() {
@@ -1457,16 +1457,51 @@ public class BrowserView extends GeckoView {
         }
     }
 
-    private static final android.util.LruCache<String, Bitmap> ICON_CACHE = new android.util.LruCache<String, Bitmap>(24);
+    private static final int MAX_ICON_CACHE_KB = 1024;
+    private static final int MAX_ICON_BYTES = 512 * 1024;
+    private static final int MAX_ICON_URL_CHARS = 8192;
+    private static final int MAX_ICON_DATA_URI_CHARS = 1572864;
+    private static final int MAX_ICON_TOTAL_CHARS = 1600000;
+    private static final int MAX_ICON_CACHED_KEY_CHARS = 8192;
+    private static final int MAX_ICON_CANDIDATES = 6;
+    private static final long MAX_ICON_LOAD_MS = 8000L;
+    private static final int MAX_ICON_SIDE = 128;
+    private static final int MAX_ICON_REDIRECTS = 3;
+    private static final android.util.LruCache<String, Bitmap> ICON_CACHE = new android.util.LruCache<String, Bitmap>(MAX_ICON_CACHE_KB) {
+        @Override
+        protected int sizeOf(String key, Bitmap value) {
+            return Math.max(1, (value.getByteCount() + 1023) / 1024);
+        }
+    };
+
+    private int iconGeneration;
+    private boolean iconDelivered;
 
     private void fetchIcon(final JSONArray hrefs) {
-        if (hrefs == null || hrefs.length() == 0) {
+        if (destroyed || hrefs == null || hrefs.length() == 0) {
             return;
         }
-        final List<String> list = new ArrayList<>();
-        for (int i = 0; i < hrefs.length(); i++) {
+        final int generation = iconGeneration;
+        final List<String> list = new ArrayList<>(Math.min(hrefs.length(), MAX_ICON_CANDIDATES));
+        int limit = Math.min(hrefs.length(), MAX_ICON_CANDIDATES);
+        int totalChars = 0;
+        for (int i = 0; i < limit; i++) {
             String h = hrefs.optString(i, "");
-            if (!h.isEmpty()) {
+            if (h.isEmpty()) {
+                continue;
+            }
+            boolean dataImage = h.regionMatches(true, 0, "data:image/", 0, 11);
+            if (dataImage ? h.length() > MAX_ICON_DATA_URI_CHARS : h.length() > MAX_ICON_URL_CHARS) {
+                continue;
+            }
+            if (totalChars + h.length() > MAX_ICON_TOTAL_CHARS) {
+                break;
+            }
+            totalChars += h.length();
+            boolean supported = h.regionMatches(true, 0, "https://", 0, 8)
+                    || h.regionMatches(true, 0, "http://", 0, 7)
+                    || dataImage;
+            if (supported && !list.contains(h)) {
                 list.add(h);
             }
         }
@@ -1474,21 +1509,29 @@ public class BrowserView extends GeckoView {
             return;
         }
         for (String h : list) {
-            Bitmap cached = ICON_CACHE.get(h);
-            if (cached != null && !cached.isRecycled()) {
-                deliverIcon(cached);
-                return;
+            if (h.length() <= MAX_ICON_CACHED_KEY_CHARS) {
+                Bitmap cached = ICON_CACHE.get(h);
+                if (cached != null && !cached.isRecycled()) {
+                    deliverIcon(cached, generation);
+                    return;
+                }
             }
         }
         final String ua = settings.getUserAgentString();
         UiThread.io().execute(new Runnable() {
             @Override
             public void run() {
+                long deadline = SystemClock.elapsedRealtime() + MAX_ICON_LOAD_MS;
                 for (String h : list) {
-                    Bitmap bmp = loadIcon(h, ua);
+                    if (SystemClock.elapsedRealtime() >= deadline) {
+                        break;
+                    }
+                    Bitmap bmp = loadIcon(h, ua, deadline);
                     if (bmp != null) {
-                        ICON_CACHE.put(h, bmp);
-                        deliverIcon(bmp);
+                        if (h.length() <= MAX_ICON_CACHED_KEY_CHARS) {
+                            ICON_CACHE.put(h, bmp);
+                        }
+                        deliverIcon(bmp, generation);
                         return;
                     }
                 }
@@ -1496,17 +1539,16 @@ public class BrowserView extends GeckoView {
         });
     }
 
-    private boolean iconDelivered;
-
     private void scheduleIconFallback() {
         final String page = getUrl();
+        final int generation = iconGeneration;
         if (page == null || !(page.startsWith("http://") || page.startsWith("https://"))) {
             return;
         }
         main.postDelayed(new Runnable() {
             @Override
             public void run() {
-                if (destroyed || iconDelivered || !page.equals(getUrl())) {
+                if (destroyed || iconDelivered || generation != iconGeneration || !page.equals(getUrl())) {
                     return;
                 }
                 try {
@@ -1523,67 +1565,201 @@ public class BrowserView extends GeckoView {
         }, 1800L);
     }
 
-    private void deliverIcon(final Bitmap bmp) {
+    private void deliverIcon(final Bitmap bmp, final int generation) {
         main.post(new Runnable() {
             @Override
             public void run() {
-                iconDelivered = true;
+                if (destroyed || generation != iconGeneration || iconDelivered || bmp == null || bmp.isRecycled()) {
+                    return;
+                }
                 BrowserClient c = client;
-                if (!destroyed && c != null) {
+                if (c != null) {
+                    iconDelivered = true;
                     c.onReceivedIcon(BrowserView.this, bmp);
                 }
             }
         });
     }
 
-    private static Bitmap loadIcon(String href, String ua) {
+    private static boolean isBlockedIpv4(long ip) {
+        int a = (int) ((ip >>> 24) & 255);
+        int b = (int) ((ip >>> 16) & 255);
+        int c = (int) ((ip >>> 8) & 255);
+        return a == 0 || a == 10 || a == 127 || a >= 224
+                || a == 169 && b == 254
+                || a == 172 && b >= 16 && b <= 31
+                || a == 192 && (b == 0 || b == 168)
+                || a == 100 && b >= 64 && b <= 127
+                || a == 198 && (b == 18 || b == 19 || b == 51 && c == 100)
+                || a == 203 && b == 0 && c == 113;
+    }
+
+    private static boolean isBlockedIconAddress(java.net.InetAddress address) {
+        if (address.isAnyLocalAddress() || address.isLoopbackAddress() || address.isLinkLocalAddress()
+                || address.isSiteLocalAddress() || address.isMulticastAddress()) {
+            return true;
+        }
+        byte[] raw = address.getAddress();
+        if (raw.length == 4) {
+            long ip = ((raw[0] & 255L) << 24) | ((raw[1] & 255L) << 16)
+                    | ((raw[2] & 255L) << 8) | (raw[3] & 255L);
+            return isBlockedIpv4(ip);
+        }
+        if (raw.length == 16) {
+            if ((raw[0] & 0xFE) == 0xFC) {
+                return true;
+            }
+            boolean mapped = true;
+            for (int i = 0; i < 10; i++) {
+                if (raw[i] != 0) {
+                    mapped = false;
+                    break;
+                }
+            }
+            if (mapped && raw[10] == (byte) 255 && raw[11] == (byte) 255) {
+                long ip = ((raw[12] & 255L) << 24) | ((raw[13] & 255L) << 16)
+                        | ((raw[14] & 255L) << 8) | (raw[15] & 255L);
+                return isBlockedIpv4(ip);
+            }
+        }
+        return false;
+    }
+
+    private static boolean isAllowedIconUrl(URL url) {
+        String protocol = url.getProtocol();
+        if (!"http".equalsIgnoreCase(protocol) && !"https".equalsIgnoreCase(protocol)) {
+            return false;
+        }
+        if (url.getUserInfo() != null) {
+            return false;
+        }
+        String host = url.getHost();
+        if (host == null || host.isEmpty() || host.indexOf('%') >= 0) {
+            return false;
+        }
+        if (host.startsWith("[") && host.endsWith("]")) {
+            host = host.substring(1, host.length() - 1);
+        }
+        String normalized = host.toLowerCase(Locale.US);
+        if (normalized.equals("localhost") || normalized.endsWith(".localhost") || normalized.endsWith(".local")
+                || normalized.endsWith(".internal") || normalized.endsWith(".lan") || normalized.endsWith(".home.arpa")) {
+            return false;
+        }
         try {
-            if (href.startsWith("data:")) {
+            java.net.InetAddress[] addresses = java.net.InetAddress.getAllByName(host);
+            if (addresses.length == 0) {
+                return false;
+            }
+            for (java.net.InetAddress address : addresses) {
+                if (isBlockedIconAddress(address)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static Bitmap decodeIcon(byte[] data) {
+        if (data == null || data.length == 0 || data.length > MAX_ICON_BYTES) {
+            return null;
+        }
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeByteArray(data, 0, data.length, bounds);
+        int width = bounds.outWidth;
+        int height = bounds.outHeight;
+        if (width <= 0 || height <= 0 || width > 32768 || height > 32768
+                || (long) width * height > 100_000_000L) {
+            return null;
+        }
+        int sample = 1;
+        while (width / sample > MAX_ICON_SIDE || height / sample > MAX_ICON_SIDE) {
+            sample <<= 1;
+        }
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = sample;
+        return BitmapFactory.decodeByteArray(data, 0, data.length, options);
+    }
+
+    private static Bitmap loadIcon(String href, String ua, long deadline) {
+        try {
+            if (SystemClock.elapsedRealtime() >= deadline) {
+                return null;
+            }
+            boolean dataImage = href.regionMatches(true, 0, "data:image/", 0, 11);
+            if (dataImage ? href.length() > MAX_ICON_DATA_URI_CHARS : href.length() > MAX_ICON_URL_CHARS) {
+                return null;
+            }
+            if (dataImage) {
                 int comma = href.indexOf(',');
                 if (comma < 0) {
                     return null;
                 }
                 String meta = href.substring(0, comma);
                 String body = href.substring(comma + 1);
-                byte[] bytes = meta.contains(";base64")
+                byte[] bytes = meta.toLowerCase(Locale.US).contains(";base64")
                         ? android.util.Base64.decode(body, android.util.Base64.DEFAULT)
                         : java.net.URLDecoder.decode(body, "UTF-8").getBytes("UTF-8");
-                return BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                return decodeIcon(bytes);
             }
-            HttpURLConnection c = null;
-            try {
-                c = (HttpURLConnection) new URL(href).openConnection();
-                c.setConnectTimeout(4000);
-                c.setReadTimeout(4000);
-                c.setInstanceFollowRedirects(true);
-                c.setRequestProperty("User-Agent", ua);
-                c.setRequestProperty("Accept", "image/*,*/*;q=0.5");
-                if (c.getResponseCode() != 200) {
+            URL current = new URL(href);
+            boolean startedHttps = "https".equalsIgnoreCase(current.getProtocol());
+            for (int redirect = 0; redirect <= MAX_ICON_REDIRECTS; redirect++) {
+                if (SystemClock.elapsedRealtime() >= deadline || !isAllowedIconUrl(current)
+                        || SystemClock.elapsedRealtime() >= deadline) {
                     return null;
                 }
-                try (InputStream in = new java.io.BufferedInputStream(c.getInputStream(), 8192)) {
-                    java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-                    byte[] buf = new byte[4096];
-                    int n;
-                    int total = 0;
-                    while ((n = in.read(buf)) > 0) {
-                        total += n;
-                        if (total > 512 * 1024) {
+                HttpURLConnection c = null;
+                try {
+                    c = (HttpURLConnection) current.openConnection();
+                    int remaining = (int) Math.max(1L, Math.min(2500L, deadline - SystemClock.elapsedRealtime()));
+                    c.setConnectTimeout(remaining);
+                    c.setReadTimeout(remaining);
+                    c.setInstanceFollowRedirects(false);
+                    c.setRequestProperty("User-Agent", ua);
+                    c.setRequestProperty("Accept", "image/*,*/*;q=0.5");
+                    int code = c.getResponseCode();
+                    if (code == HttpURLConnection.HTTP_MOVED_PERM || code == HttpURLConnection.HTTP_MOVED_TEMP
+                            || code == HttpURLConnection.HTTP_SEE_OTHER || code == 307 || code == 308) {
+                        String location = c.getHeaderField("Location");
+                        if (location == null || redirect == MAX_ICON_REDIRECTS) {
                             return null;
                         }
-                        out.write(buf, 0, n);
+                        URL next = new URL(current, location);
+                        if (startedHttps && !"https".equalsIgnoreCase(next.getProtocol())) {
+                            return null;
+                        }
+                        current = next;
+                        continue;
                     }
-                    byte[] data = out.toByteArray();
-                    return BitmapFactory.decodeByteArray(data, 0, data.length);
-                }
-            } finally {
-                if (c != null) {
-                    c.disconnect();
+                    if (code != HttpURLConnection.HTTP_OK || c.getContentLengthLong() > MAX_ICON_BYTES) {
+                        return null;
+                    }
+                    try (InputStream in = new java.io.BufferedInputStream(c.getInputStream(), 8192)) {
+                        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(16384);
+                        byte[] buf = new byte[4096];
+                        int n;
+                        int total = 0;
+                        while ((n = in.read(buf)) > 0) {
+                            total += n;
+                            if (total > MAX_ICON_BYTES) {
+                                return null;
+                            }
+                            out.write(buf, 0, n);
+                        }
+                        return decodeIcon(out.toByteArray());
+                    }
+                } finally {
+                    if (c != null) {
+                        c.disconnect();
+                    }
                 }
             }
-        } catch (Throwable t) {
-            return null;
+        } catch (Throwable ignored) {
         }
+        return null;
     }
 
     private void failPendingEvals() {
@@ -1735,6 +1911,7 @@ public class BrowserView extends GeckoView {
                 url = uri;
             }
             iconDelivered = false;
+            iconGeneration++;
             failPendingEvals();
             topPort = null;
             framePorts.clear();

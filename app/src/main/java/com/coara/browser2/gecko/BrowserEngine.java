@@ -83,8 +83,8 @@ public final class BrowserEngine {
         ContentBlocking.Settings blocking = new ContentBlocking.Settings.Builder()
                 .antiTracking(ContentBlocking.AntiTracking.DEFAULT)
                 .safeBrowsing(ContentBlocking.SafeBrowsing.DEFAULT)
-                .cookieBehavior(ContentBlocking.CookieBehavior.ACCEPT_ALL)
-                .cookieBehaviorPrivateMode(ContentBlocking.CookieBehavior.ACCEPT_ALL)
+                .cookieBehavior(ContentBlocking.CookieBehavior.ACCEPT_FIRST_PARTY)
+                .cookieBehaviorPrivateMode(ContentBlocking.CookieBehavior.ACCEPT_FIRST_PARTY)
                 .build();
         GeckoRuntimeSettings settings = new GeckoRuntimeSettings.Builder()
                 .javaScriptEnabled(true)
@@ -97,11 +97,12 @@ public final class BrowserEngine {
                 .inputAutoZoomEnabled(false)
                 .forceUserScalableEnabled(false)
                 .webManifest(false)
-                .fissionEnabled(false)
+                .fissionEnabled(true)
                 .loginAutofillEnabled(false)
                 .translationsOfferPopup(false)
                 .crashPullNeverShowAgain(true)
                 .build();
+        settings.setWebContentIsolationStrategy(GeckoRuntimeSettings.STRATEGY_ISOLATE_EVERYTHING);
         runtime = GeckoRuntime.create(appContext, settings);
         runtime.getSettings().setPreferredColorScheme(darkMode
                 ? GeckoRuntimeSettings.COLOR_SCHEME_DARK

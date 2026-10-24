@@ -18,7 +18,14 @@ public final class ErrorPages {
     public static final String KIND_SSL = "ssl";
     public static final String KIND_SAFE = "sb";
 
-    private static final LruCache<String, String> PAGES = new LruCache<>(48);
+    private static final int MAX_PAGES_CACHE_KB = 1024;
+    private static final LruCache<String, String> PAGES = new LruCache<String, String>(MAX_PAGES_CACHE_KB) {
+        @Override
+        protected int sizeOf(String key, String value) {
+            long bytes = ((long) key.length() + value.length()) * 2L;
+            return (int) Math.max(1L, Math.min(Integer.MAX_VALUE, (bytes + 1023L) / 1024L));
+        }
+    };
 
     private ErrorPages() {
     }

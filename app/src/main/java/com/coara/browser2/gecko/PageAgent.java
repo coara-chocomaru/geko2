@@ -176,12 +176,6 @@ public final class PageAgent {
         if (lastAdBlock != null) {
             postBackground(lastAdBlock);
         }
-        engine.mainHandler().post(new Runnable() {
-            @Override
-            public void run() {
-                BrowserEngine.get();
-            }
-        });
     }
 
     private void onBackgroundMessage(JSONObject m) {
