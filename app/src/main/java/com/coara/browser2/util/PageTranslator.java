@@ -115,9 +115,12 @@ public final class PageTranslator {
             return;
         }
         ensureMlKit(view.getContext());
+        toast(view, "翻訳を開始しています…");
         view.evaluateJavascript(STATE_JS, value -> {
             if ("1".equals(value)) {
                 restore(view);
+            } else if (value == null || "null".equals(value)) {
+                toast(view, "翻訳処理を開始できませんでした。ページを読み込んでから再度お試しください");
             } else {
                 start(view, allowOnline, false);
             }
@@ -185,9 +188,6 @@ public final class PageTranslator {
                 TranslateSettings.getTarget(context, secret),
                 TranslateSettings.getSource(context, secret));
         SESSIONS.put(view, session);
-        if (!silent) {
-            toast(view, "翻訳中…");
-        }
         extract(session, true);
     }
 
@@ -216,7 +216,7 @@ public final class PageTranslator {
             return;
         }
         try {
-            view.evaluateJavascript("window.__coaraTrTarget='" + session.target + "';" + script,
+            view.evaluateJavascript("window.__coaraTrTarget=" + JSONObject.quote(session.target) + ";" + script,
                     value -> onExtracted(session, value, first));
         } catch (Exception e) {
             abort(session, "翻訳できませんでした");
