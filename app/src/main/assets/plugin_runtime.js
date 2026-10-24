@@ -1,25 +1,15 @@
 (function(PLG){
-var B=window["%BRIDGE%"];
-var T="%TOKEN%";
+var B=__coaraBridge;
 var META=%META%;
 var CSS=%CSS%;
 var KEY="%KEY%";
-var PKEY="%PKEY%";
 var isTop=false;
 try{isTop=window.top===window;}catch(e){}
 function jparse(s){try{return JSON.parse(s);}catch(e){return null;}}
-try{
-var rs=window.__coaraPlgReady;
-if(!rs){
-rs={};
-Object.defineProperty(window,"__coaraPlgReady",{value:rs,enumerable:false,configurable:true});
-}
-rs[KEY]=1;
-}catch(e){}
 function inv(op,a,b,c){
 try{
 if(B){
-return B.invoke(T,META.id,op,a==null?"":String(a),b==null?"":String(b),c==null?"":String(c));
+return B.invoke(op,a==null?"":String(a),b==null?"":String(b),c==null?"":String(c));
 }
 }catch(e){}
 return null;
@@ -105,15 +95,6 @@ else{document.addEventListener("DOMContentLoaded",function(){safe(f);},{once:tru
 }
 var cmds={};
 var cmdSeq=0;
-var cmdRoot=null;
-try{
-cmdRoot=window.__coaraPlgCmd;
-if(!cmdRoot){
-cmdRoot={};
-Object.defineProperty(window,"__coaraPlgCmd",{value:cmdRoot,enumerable:false,configurable:true});
-}
-cmdRoot[KEY]=function(cid){var f=cmds[cid];if(typeof f==="function")safe(function(){f();});};
-}catch(e){}
 var cmdNames={};
 var cmdArmed=false;
 function resendCommands(){
@@ -137,6 +118,9 @@ setTimeout(resendCommands,3500);
 function registerCommand(name,fn){
 if(!isTop||typeof fn!=="function")return null;
 var cid=KEY+":"+(++cmdSeq);
+var registered=false;
+try{registered=!!(B&&typeof B.registerCommand==="function"&&B.registerCommand(cid,fn));}catch(e){}
+if(!registered)return null;
 cmds[cid]=fn;
 cmdNames[cid]=String(name);
 inv("cmd",cid,cmdNames[cid]);
@@ -147,6 +131,7 @@ function unregisterCommand(cid){
 if(cid==null)return;
 delete cmds[cid];
 delete cmdNames[cid];
+try{if(B&&typeof B.unregisterCommand==="function")B.unregisterCommand(String(cid));}catch(e){}
 inv("uncmd",cid);
 }
 function toB64(buf){
@@ -289,7 +274,7 @@ if(ran)return;
 ran=true;
 try{
 for(var i=0;i<CSS.length;i++){api.addStyle(CSS[i]);}
-PLG.call(window,api);
+PLG(api);
 inv("ok","","","");
 }catch(e){
 rep("runtime",e&&e.message?e.message:String(e),e&&e.stack);

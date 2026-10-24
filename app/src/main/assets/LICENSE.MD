@@ -1,11 +1,11 @@
 # LICENSE
 
 - 私のアプリ「com.coara.browser2」は、以下のサードパーティライブラリを使用しています。
-- 全ライブラリは Apache License, Version 2.0 に基づいてライセンスされています。
+- ライセンス条件はライブラリごとに異なります。各ライブラリの公式ライセンス情報および配布物に含まれる条件が適用されます。
 
 1. **AndroidX Core**
 
-   * アーティファクト: `androidx.core:core:1.18.0`
+   * アーティファクト: `androidx.core:core:1.19.1`
    * ライセンス: Apache License, Version 2.0
    * 著作権: © The Android Open Source Project
 
@@ -35,25 +35,25 @@
 
 6. **Emoji2**
 
-   * アーティファクト: `androidx.emoji2:emoji2:1.6.0`
+   * アーティファクト: `androidx.emoji2:emoji2:1.7.0`
    * ライセンス: Apache License, Version 2.0
    * 著作権: © The Android Open Source Project
 
 7. **AndroidX AppCompat**
 
-   * アーティファクト: `androidx.appcompat:appcompat:1.7.1`
+   * アーティファクト: `androidx.appcompat:appcompat:1.8.0`
    * ライセンス: Apache License, Version 2.0
    * 著作権: © The Android Open Source Project
 
 8. **Material Components for Android**
 
-   * アーティファクト: `com.google.android.material:material:1.13.0`
+   * アーティファクト: `com.google.android.material:material:1.14.0`
    * ライセンス: Apache License, Version 2.0
    * 著作権: © Google Inc.
 
 9. **ConstraintLayout**
 
-   * アーティファクト: `androidx.constraintlayout:constraintlayout:2.2.1`
+   * アーティファクト: `androidx.constraintlayout:constraintlayout:2.2.2`
    * ライセンス: Apache License, Version 2.0
    * 著作権: © The Android Open Source Project
 
@@ -83,7 +83,7 @@
 
 14. **GeckoView**
 
-    * アーティファクト: `org.mozilla.geckoview:geckoview:157.0.20261005135250`
+    * アーティファクト: `org.mozilla.geckoview:geckoview:158.0.20261021001945`
     * ライセンス: Mozilla Public License, Version 2.0
     * 著作権: © Mozilla Foundation
 
@@ -101,7 +101,7 @@
 
 17. **Fragment**
 
-    * アーティファクト: `androidx.fragment:fragment:1.8.9`
+    * アーティファクト: `androidx.fragment:fragment:1.9.1`
     * ライセンス: Apache License, Version 2.0
     * 著作権: © The Android Open Source Project
 
