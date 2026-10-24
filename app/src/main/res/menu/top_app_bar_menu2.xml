@@ -30,6 +30,7 @@
             <item android:id="@+id/action_deskua" android:title="デスクトップ表示" android:checkable="true" />
             <item android:id="@+id/action_translate" android:title="ページを翻訳" />
             <item android:id="@+id/action_translate_settings" android:title="翻訳設定" />
+            <item android:id="@+id/action_picture_in_picture" android:title="小窓再生 (PiP)" android:checkable="true" />
         </menu>
     </item>
 
