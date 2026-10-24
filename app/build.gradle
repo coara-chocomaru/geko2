@@ -5,7 +5,7 @@ plugins {
 android {
     compileSdk {
         version = release(37) {
-            minorApiLevel = 2
+            minorApiLevel = 1
         }
     }
     namespace = 'com.coara.browser2'
@@ -13,9 +13,9 @@ android {
     defaultConfig {
         applicationId = 'com.coara.browser2'
         minSdk = 26
-        targetSdk = 31
-        versionCode = 60
-        versionName = "1.2"
+        targetSdk = 34
+        versionCode = 24
+        versionName = "1.1.1"
         multiDexEnabled = true
         vectorDrawables.useSupportLibrary = true
         if (project.hasProperty('bundleBuild')) {
@@ -31,19 +31,25 @@ android {
         coreLibraryDesugaringEnabled = true
     }
     
+    def releaseKeystorePath = System.getenv('RELEASE_KEYSTORE_PATH')
+    def releaseKeystorePassword = System.getenv('RELEASE_KEYSTORE_PASSWORD')
+    def releaseKeyAlias = System.getenv('RELEASE_KEY_ALIAS')
+    def releaseKeyPassword = System.getenv('RELEASE_KEY_PASSWORD')
+    def releaseSigningValues = [releaseKeystorePath, releaseKeystorePassword, releaseKeyAlias, releaseKeyPassword]
+    def releaseSigningConfigured = releaseSigningValues.every { it != null && !it.trim().isEmpty() }
+    def releaseSigningPartiallyConfigured = releaseSigningValues.any { it != null && !it.trim().isEmpty() }
+
+    if (releaseSigningPartiallyConfigured && !releaseSigningConfigured) {
+        throw new GradleException('Release signing requires RELEASE_KEYSTORE_PATH, RELEASE_KEYSTORE_PASSWORD, RELEASE_KEY_ALIAS, and RELEASE_KEY_PASSWORD.')
+    }
+
     signingConfigs {
-        release {
-            def releaseKeystorePath = System.getenv('RELEASE_KEYSTORE_PATH')
-            if (releaseKeystorePath) {
+        if (releaseSigningConfigured) {
+            release {
                 storeFile file(releaseKeystorePath)
-                storePassword System.getenv('RELEASE_KEYSTORE_PASSWORD')
-                keyAlias System.getenv('RELEASE_KEY_ALIAS')
-                keyPassword System.getenv('RELEASE_KEY_PASSWORD')
-            } else {
-                storeFile file('test.jks')
-                storePassword 'test1234'
-                keyAlias 'key0'
-                keyPassword 'test1234'
+                storePassword releaseKeystorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
             }
         }
     }
@@ -57,7 +63,9 @@ android {
             shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             debuggable = false
-            signingConfig = signingConfigs.release
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.release
+            }
         }
     }
 
@@ -94,6 +102,7 @@ tasks.withType(JavaCompile).configureEach {
 
 dependencies {
     implementation 'androidx.core:core:1.19.1'
+    implementation 'androidx.browser:browser:1.10.0'
     implementation 'androidx.startup:startup-runtime:1.2.0'
     implementation 'androidx.profileinstaller:profileinstaller:1.4.1'
     implementation 'io.noties.markwon:core:4.6.2'
