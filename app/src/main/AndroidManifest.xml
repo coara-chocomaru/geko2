@@ -142,7 +142,6 @@
             android:configChanges="keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="true"
             android:launchMode="singleTask"
-            android:supportsPictureInPicture="true"
             android:resizeableActivity="true"
             android:importantForAutofill="yes"
             android:windowSoftInputMode="adjustResize">
@@ -211,11 +210,11 @@
 
         <activity
             android:name=".CustomTabActivity"
+            android:label="Coara Gecko 一時タブ"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
             android:exported="true"
             android:launchMode="singleTop"
             android:resizeableActivity="true"
-            android:supportsPictureInPicture="true"
             android:taskAffinity=""
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.MaterialComponents.Light.NoActionBar">
