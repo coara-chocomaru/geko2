@@ -78,6 +78,7 @@ public class BrowserView extends GeckoView {
     private static final class PendingEval {
         final String code;
         final ValueCallback<String> callback;
+        Runnable timeout;
 
         PendingEval(String code, ValueCallback<String> callback) {
             this.code = code;
@@ -117,6 +118,10 @@ public class BrowserView extends GeckoView {
     private WebExtension.Port topPort;
     private String url = "";
     private String dataLogicalUrl;
+    private String lastStableUrl;
+    private String externalResponseUrl;
+    private String urlBeforeLoad;
+    private boolean handlingExternalResponse;
     private String title = "";
     private int progress = 100;
     private boolean loading;
@@ -227,7 +232,7 @@ public class BrowserView extends GeckoView {
                 .userAgentMode(settings.isDesktopMode() ? GeckoSessionSettings.USER_AGENT_MODE_DESKTOP : GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
                 .viewportMode(settings.isDesktopMode() ? GeckoSessionSettings.VIEWPORT_MODE_DESKTOP : GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
                 .userAgentOverride(settings.getUserAgentOverride())
-                .suspendMediaWhenInactive(false)
+                .suspendMediaWhenInactive(true)
                 .build();
     }
 
@@ -458,6 +463,7 @@ public class BrowserView extends GeckoView {
         if (target == null || target.isEmpty()) {
             return;
         }
+        clearExternalResponseState();
         ensureSession();
         if (session == null) {
             return;
@@ -496,6 +502,7 @@ public class BrowserView extends GeckoView {
         if (target == null || target.isEmpty()) {
             return;
         }
+        clearExternalResponseState();
         ensureSession();
         if (session == null) {
             return;
@@ -525,6 +532,7 @@ public class BrowserView extends GeckoView {
             evaluateJavascript(target.substring(11), null);
             return;
         }
+        clearExternalResponseState();
         ensureSession();
         if (session == null) {
             return;
@@ -546,6 +554,7 @@ public class BrowserView extends GeckoView {
     }
 
     private void loadLocalPage(final String logical) {
+        clearExternalResponseState();
         String actual = LocalPages.toActual(logical);
         if (actual != null) {
             dataLogicalUrl = null;
@@ -590,6 +599,7 @@ public class BrowserView extends GeckoView {
     }
 
     public void loadData(String html, String mimeType, String baseUrl) {
+        clearExternalResponseState();
         ensureSession();
         if (session == null || html == null) {
             return;
@@ -607,14 +617,66 @@ public class BrowserView extends GeckoView {
         if (session == null) {
             return;
         }
+        if (handlingExternalResponse) {
+            String response = externalResponseUrl;
+            String stable = isWebUrl(lastStableUrl) && !lastStableUrl.equals(response) ? lastStableUrl
+                    : isWebUrl(urlBeforeLoad) && !urlBeforeLoad.equals(response) ? urlBeforeLoad : null;
+            handlingExternalResponse = false;
+            externalResponseUrl = null;
+            urlBeforeLoad = stable;
+            if (stable != null) {
+                url = stable;
+                lastStableUrl = stable;
+                dataLogicalUrl = null;
+                int flags = GeckoSession.LOAD_FLAGS_REPLACE_HISTORY;
+                if (settings.getCacheMode() == BrowserSettings.CACHE_BYPASS) {
+                    flags |= GeckoSession.LOAD_FLAGS_BYPASS_CACHE;
+                }
+                session.load(new GeckoSession.Loader().uri(stable).flags(flags));
+                return;
+            }
+            url = "";
+            lastStableUrl = null;
+            dataLogicalUrl = null;
+            BrowserClient c = client;
+            if (c != null) {
+                c.onUrlChanged(BrowserView.this, url, false);
+            }
+            return;
+        }
         session.reload(settings.getCacheMode() == BrowserSettings.CACHE_BYPASS
                 ? GeckoSession.LOAD_FLAGS_BYPASS_CACHE : GeckoSession.LOAD_FLAGS_NONE);
+    }
+
+    private static boolean isWebUrl(String value) {
+        if (value == null) {
+            return false;
+        }
+        String lower = value.trim().toLowerCase(Locale.ROOT);
+        return lower.startsWith("https://") || lower.startsWith("http://");
+    }
+
+    private void clearExternalResponseState() {
+        handlingExternalResponse = false;
+        externalResponseUrl = null;
+        urlBeforeLoad = null;
+    }
+
+    public void rejectPictureInPictureRequest() {
+        if (session != null) {
+            try {
+                session.getSessionPictureInPicture().exit();
+            } catch (Throwable ignored) {
+            }
+        }
+        setPictureInPictureActive(false);
     }
 
     public void reloadForSettings() {
         if (session == null) {
             return;
         }
+        clearExternalResponseState();
         String actual = url;
         String failed = actual != null ? ErrorPages.failedUrlFor(actual) : null;
         if (failed != null) {
@@ -768,6 +830,10 @@ public class BrowserView extends GeckoView {
         }
         sessionState = parsed;
         sessionStateUrl = in.getString(STATE_URL_KEY);
+        if (isWebUrl(sessionStateUrl)) {
+            url = sessionStateUrl;
+            lastStableUrl = sessionStateUrl;
+        }
         session.restoreState(parsed);
         return true;
     }
@@ -1461,7 +1527,14 @@ public class BrowserView extends GeckoView {
         }
         if (topPort == null) {
             if (pendingEvals.size() < MAX_PENDING_EVALS) {
-                pendingEvals.add(new PendingEval(code, callback));
+                PendingEval pending = new PendingEval(code, callback);
+                pending.timeout = () -> {
+                    if (pendingEvals.remove(pending) && pending.callback != null) {
+                        pending.callback.onReceiveValue("null");
+                    }
+                };
+                pendingEvals.add(pending);
+                main.postDelayed(pending.timeout, EVAL_TIMEOUT_MS);
             } else if (callback != null) {
                 callback.onReceiveValue("null");
             }
@@ -1569,6 +1642,9 @@ public class BrowserView extends GeckoView {
             List<PendingEval> copy = new ArrayList<>(pendingEvals);
             pendingEvals.clear();
             for (PendingEval p : copy) {
+                if (p.timeout != null) {
+                    main.removeCallbacks(p.timeout);
+                }
                 dispatchEval(p.code, p.callback);
             }
         }
@@ -1922,7 +1998,16 @@ public class BrowserView extends GeckoView {
     }
 
     private void failPendingEvals() {
+        List<PendingEval> pending = new ArrayList<>(pendingEvals);
         pendingEvals.clear();
+        for (PendingEval item : pending) {
+            if (item.timeout != null) {
+                main.removeCallbacks(item.timeout);
+            }
+            if (item.callback != null) {
+                item.callback.onReceiveValue("null");
+            }
+        }
         List<ValueCallback<String>> cbs = new ArrayList<>(evalCallbacks.values());
         evalCallbacks.clear();
         for (ValueCallback<String> cb : cbs) {
@@ -2007,6 +2092,12 @@ public class BrowserView extends GeckoView {
             if (uri == null) {
                 return;
             }
+            if (handlingExternalResponse) {
+                if (uri.equals(externalResponseUrl)) {
+                    return;
+                }
+                clearExternalResponseState();
+            }
             url = uri;
             if (!uri.startsWith("data:")) {
                 dataLogicalUrl = LocalPages.isLogical(dataLogicalUrl) && uri.startsWith("data:") ? dataLogicalUrl : null;
@@ -2069,6 +2160,15 @@ public class BrowserView extends GeckoView {
     private final GeckoSession.ProgressDelegate progressDelegate = new GeckoSession.ProgressDelegate() {
         @Override
         public void onPageStart(GeckoSession s, String uri) {
+            if (uri != null) {
+                if (isWebUrl(url) && !url.equals(uri)) {
+                    lastStableUrl = url;
+                }
+                urlBeforeLoad = isWebUrl(url) && !url.equals(uri) ? url : lastStableUrl;
+                if (handlingExternalResponse && !uri.equals(externalResponseUrl)) {
+                    clearExternalResponseState();
+                }
+            }
             loading = true;
             progress = 0;
             title = "";
@@ -2091,6 +2191,16 @@ public class BrowserView extends GeckoView {
             loading = false;
             progress = 100;
             BrowserClient c = client;
+            if (handlingExternalResponse) {
+                if (c != null) {
+                    c.onProgressChanged(BrowserView.this, 100);
+                }
+                return;
+            }
+            if (success && isWebUrl(getUrl())) {
+                lastStableUrl = getUrl();
+                urlBeforeLoad = lastStableUrl;
+            }
             if (c != null) {
                 c.onPageFinished(BrowserView.this, getUrl());
             }
@@ -2172,6 +2282,25 @@ public class BrowserView extends GeckoView {
             if (c == null || response == null) {
                 return;
             }
+            String responseUrl = response.uri;
+            String referrerUrl = isWebUrl(lastStableUrl) && !lastStableUrl.equals(responseUrl)
+                    ? lastStableUrl
+                    : isWebUrl(urlBeforeLoad) && !urlBeforeLoad.equals(responseUrl) ? urlBeforeLoad
+                    : isWebUrl(url) && !url.equals(responseUrl) ? url : null;
+            handlingExternalResponse = true;
+            externalResponseUrl = responseUrl;
+            if (referrerUrl != null) {
+                lastStableUrl = referrerUrl;
+                url = referrerUrl;
+                dataLogicalUrl = null;
+            } else {
+                lastStableUrl = null;
+                urlBeforeLoad = null;
+                url = "";
+                dataLogicalUrl = null;
+            }
+            loading = false;
+            progress = 100;
             Map<String, String> headers = new HashMap<>();
             if (response.headers != null) {
                 for (Map.Entry<String, String> e : response.headers.entrySet()) {
@@ -2189,7 +2318,9 @@ public class BrowserView extends GeckoView {
             } catch (Exception ignored) {
             }
             c.onDownloadRequested(BrowserView.this, new DownloadRequest(response.uri, null, mime, length, disposition,
-                    settings.getUserAgentString(), getUrl(), headers, response));
+                    settings.getUserAgentString(), referrerUrl == null ? getUrl() : referrerUrl, headers, response));
+            c.onUrlChanged(BrowserView.this, getUrl(), false);
+            c.onProgressChanged(BrowserView.this, 100);
         }
 
         @Override
