@@ -89,11 +89,12 @@ public final class CustomTabActivity extends MainActivity {
 
     @Override
     protected boolean shouldRunCustomTabForIntent(Intent intent) {
-        if (customTabsIntentRecognized || hasCustomTabsIntentExtras(intent)) {
-            return true;
+        if (!(customTabsIntentRecognized || hasCustomTabsIntentExtras(intent))) {
+            return false;
         }
         return intent != null && Intent.ACTION_VIEW.equals(intent.getAction())
-                && isAllowedUrl(intent.getData());
+                && isAllowedUrl(intent.getData())
+                && BrowserUrlRouter.isWebUrl(intent.getData().toString());
     }
 
     private boolean hasCustomTabsIntentExtras(Intent intent) {

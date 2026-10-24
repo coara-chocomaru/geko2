@@ -81,6 +81,7 @@ import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.textfield.TextInputEditText;
 import com.coara.browser2.util.BrowserUrlRouter;
+import com.coara.browser2.util.PictureInPictureSettings;
 import com.coara.browser2.util.BrowserAssetLoader;
 import com.coara.browser2.model.Bookmark;
 import com.google.android.material.snackbar.Snackbar;
@@ -4046,6 +4047,11 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             pictureInPictureItem.setEnabled(supported);
             pictureInPictureItem.setTitle(enabled ? "小窓再生 (PiP) ON" : "小窓再生 (PiP) OFF");
         }
+        MenuItem pictureInPictureSystemSettingsItem = menu.findItem(R.id.action_picture_in_picture_system_settings);
+        if (pictureInPictureSystemSettingsItem != null) {
+            pictureInPictureSystemSettingsItem.setVisible(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    && getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE));
+        }
         boolean prepared = super.onPrepareOptionsMenu(menu);
         BrowserMenuController.prepare(this, menu);
         return prepared;
@@ -4056,6 +4062,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         int id = item.getItemId();
         if (id == R.id.action_picture_in_picture) {
             togglePictureInPicture(item);
+            return true;
+        } else if (id == R.id.action_picture_in_picture_system_settings) {
+            PictureInPictureSettings.open(this);
             return true;
         } else if (id == R.id.action_tabs) {
             showTabsDialog();

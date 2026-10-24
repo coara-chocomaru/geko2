@@ -85,6 +85,7 @@ import com.coara.browser2.util.AdBlockEngine;
 import com.coara.browser2.util.PageTranslator;
 import com.coara.browser2.util.TranslateSettingsDialog;
 import com.coara.browser2.util.BrowserUrlRouter;
+import com.coara.browser2.util.PictureInPictureSettings;
 import com.coara.browser2.util.BrowserAssetLoader;
 import com.coara.browser2.util.UiThread;
 import com.coara.browser2.util.HistoryDialog;
@@ -1708,12 +1709,20 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             pictureInPictureItem.setEnabled(supported);
             pictureInPictureItem.setTitle(enabled ? "小窓再生 (PiP) ON" : "小窓再生 (PiP) OFF");
         }
+        MenuItem pictureInPictureSystemSettingsItem = menu.findItem(R.id.action_picture_in_picture_system_settings);
+        if (pictureInPictureSystemSettingsItem != null) {
+            pictureInPictureSystemSettingsItem.setVisible(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    && getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE));
+        }
         return super.onPrepareOptionsMenu(menu);
     }
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         int id = item.getItemId();
-        if (id == R.id.action_picture_in_picture) {
+        if (id == R.id.action_picture_in_picture_system_settings) {
+            PictureInPictureSettings.open(this);
+            return true;
+        } else if (id == R.id.action_picture_in_picture) {
             boolean enabled = pref != null && pref.getBoolean("picture_in_picture_enabled", false);
             enabled = !enabled;
             if (pref != null) {

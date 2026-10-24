@@ -127,14 +127,24 @@ public final class MediaPipActivity extends Activity {
                     if (enterPictureInPictureMode(params)) {
                         enteredPip = true;
                     } else {
+                        showPipStartFailure();
                         finishAndClose();
                     }
                 } catch (RuntimeException error) {
+                    showPipStartFailure();
                     finishAndClose();
                 }
             });
         } catch (Throwable error) {
             finishAndClose();
+        }
+    }
+
+    private void showPipStartFailure() {
+        if (!isFinishing()) {
+            android.widget.Toast.makeText(this,
+                    "小窓再生を開始できません。AndroidのPiP許可設定と端末の対応状況を確認してください",
+                    android.widget.Toast.LENGTH_LONG).show();
         }
     }
 
