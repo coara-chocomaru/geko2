@@ -3,6 +3,8 @@ package com.coara.browser2.util;
 import android.app.Activity;
 import android.content.Context;
 import android.os.Build;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
@@ -15,12 +17,18 @@ import android.widget.LinearLayout;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import java.net.URL;
+import java.nio.ByteBuffer;
+import java.security.KeyStore;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
 
 public final class BasicAuthManager {
     public static final String EXTRA_BASIC_AUTH_ENABLED = "com.coara.browser2.EXTRA_BASIC_AUTH_ENABLED";
@@ -31,6 +39,8 @@ public final class BasicAuthManager {
     }
 
     private static final String STORE_NAME = "basic_auth_store";
+    private static final String KEY_ALIAS = "com.coara.browser2.basic_auth.v1";
+    private static final String ENCRYPTED_PREFIX = "enc:v1:";
 
     public interface CredentialsCallback {
         void onCredentials(String username, String password);
@@ -276,6 +286,14 @@ public final class BasicAuthManager {
             context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE).edit().clear().apply();
         } catch (Exception ignored) {
         }
+        try {
+            KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore");
+            keyStore.load(null);
+            if (keyStore.containsAlias(KEY_ALIAS)) {
+                keyStore.deleteEntry(KEY_ALIAS);
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     public static void cancelPendingForActivity(Activity activity) {
@@ -326,9 +344,24 @@ public final class BasicAuthManager {
         try {
             android.content.SharedPreferences store = activity.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE);
             String key = buildCredentialKey(host, realm);
-            String user = store.getString("u\u0000" + key, null);
-            String pass = store.getString("p\u0000" + key, null);
+            String userKey = "u\u0000" + key;
+            String passKey = "p\u0000" + key;
+            String storedUser = store.getString(userKey, null);
+            String storedPass = store.getString(passKey, null);
+            String user = decryptCredential(storedUser, userKey);
+            String pass = decryptCredential(storedPass, passKey);
             if (user != null && pass != null) {
+                if (!isEncryptedCredential(storedUser) || !isEncryptedCredential(storedPass)) {
+                    String encryptedUser = encryptCredential(user, userKey);
+                    String encryptedPass = encryptCredential(pass, passKey);
+                    android.content.SharedPreferences.Editor editor = store.edit();
+                    if (encryptedUser != null && encryptedPass != null) {
+                        editor.putString(userKey, encryptedUser).putString(passKey, encryptedPass);
+                    } else {
+                        editor.remove(userKey).remove(passKey);
+                    }
+                    editor.apply();
+                }
                 Credentials credentials = new Credentials(user, pass);
                 synchronized (LOCK) {
                     MEMORY.put(key, credentials);
@@ -479,12 +512,105 @@ public final class BasicAuthManager {
         }
         try {
             String key = buildCredentialKey(host, realm);
-            activity.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE).edit()
-                    .putString("u\u0000" + key, credentials.username)
-                    .putString("p\u0000" + key, credentials.password)
-                    .apply();
+            String userKey = "u\u0000" + key;
+            String passKey = "p\u0000" + key;
+            String encryptedUser = encryptCredential(credentials.username, userKey);
+            String encryptedPass = encryptCredential(credentials.password, passKey);
+            android.content.SharedPreferences.Editor editor = activity.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE).edit();
+            if (encryptedUser != null && encryptedPass != null) {
+                editor.putString(userKey, encryptedUser).putString(passKey, encryptedPass);
+            } else {
+                editor.remove(userKey).remove(passKey);
+            }
+            editor.apply();
         } catch (Exception ignored) {
         }
+    }
+
+    private static boolean isEncryptedCredential(String value) {
+        return value != null && value.startsWith(ENCRYPTED_PREFIX);
+    }
+
+    private static String encryptCredential(String value, String storageKey) {
+        if (value == null || storageKey == null) {
+            return null;
+        }
+        try {
+            SecretKey key = getCredentialEncryptionKey(true);
+            if (key == null) {
+                return null;
+            }
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE, key);
+            cipher.updateAAD(storageKey.getBytes(StandardCharsets.UTF_8));
+            byte[] iv = cipher.getIV();
+            byte[] encrypted = cipher.doFinal(value.getBytes(StandardCharsets.UTF_8));
+            ByteBuffer buffer = ByteBuffer.allocate(1 + iv.length + encrypted.length);
+            buffer.put((byte) iv.length);
+            buffer.put(iv);
+            buffer.put(encrypted);
+            return ENCRYPTED_PREFIX + Base64.encodeToString(buffer.array(), Base64.NO_WRAP);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static String decryptCredential(String value, String storageKey) {
+        if (value == null || storageKey == null) {
+            return null;
+        }
+        if (!isEncryptedCredential(value)) {
+            return value;
+        }
+        try {
+            SecretKey key = getCredentialEncryptionKey(false);
+            if (key == null) {
+                return null;
+            }
+            byte[] packed = Base64.decode(value.substring(ENCRYPTED_PREFIX.length()), Base64.DEFAULT);
+            if (packed.length < 1 + 12 + 16) {
+                return null;
+            }
+            ByteBuffer buffer = ByteBuffer.wrap(packed);
+            int ivLength = buffer.get() & 0xff;
+            if (ivLength < 12 || ivLength > 16 || buffer.remaining() < 16) {
+                return null;
+            }
+            byte[] iv = new byte[ivLength];
+            buffer.get(iv);
+            byte[] ciphertext = new byte[buffer.remaining()];
+            buffer.get(ciphertext);
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(128, iv));
+            cipher.updateAAD(storageKey.getBytes(StandardCharsets.UTF_8));
+            return new String(cipher.doFinal(ciphertext), StandardCharsets.UTF_8);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static SecretKey getCredentialEncryptionKey(boolean create) throws Exception {
+        KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore");
+        keyStore.load(null);
+        if (keyStore.containsAlias(KEY_ALIAS)) {
+            java.security.Key existing = keyStore.getKey(KEY_ALIAS, null);
+            if (existing instanceof SecretKey) {
+                return (SecretKey) existing;
+            }
+            keyStore.deleteEntry(KEY_ALIAS);
+        }
+        if (!create) {
+            return null;
+        }
+        KeyGenerator generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
+        generator.init(new KeyGenParameterSpec.Builder(KEY_ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setRandomizedEncryptionRequired(true)
+                .setKeySize(256)
+                .build());
+        return generator.generateKey();
     }
 
     private static void clearStoredCredentials(Context context, String host, String realm, BrowserView view) {

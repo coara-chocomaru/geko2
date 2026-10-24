@@ -22,7 +22,7 @@ public class DownloadFallbackService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        executor = Executors.newCachedThreadPool();
+        executor = Executors.newFixedThreadPool(2);
     }
 
     @Override

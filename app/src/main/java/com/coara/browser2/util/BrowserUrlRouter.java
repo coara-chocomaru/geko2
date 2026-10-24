@@ -64,10 +64,15 @@ public final class BrowserUrlRouter {
     }
 
     public static boolean handleUrlLoading(Activity activity, BrowserView webView, String rawUrl) {
-        return handleUrlLoading(activity, webView, rawUrl, true);
+        return handleUrlLoading(activity, webView, rawUrl, true, true, false);
     }
 
     public static boolean handleUrlLoading(Activity activity, BrowserView webView, String rawUrl, boolean isMainFrame) {
+        return handleUrlLoading(activity, webView, rawUrl, isMainFrame, true, false);
+    }
+
+    public static boolean handleUrlLoading(Activity activity, BrowserView webView, String rawUrl,
+                                           boolean isMainFrame, boolean hasUserGesture, boolean isRedirect) {
         String url = rawUrl == null ? "" : rawUrl.trim();
         if (url.isEmpty()) {
             return true;
@@ -79,7 +84,7 @@ public final class BrowserUrlRouter {
         }
 
         if (isWebScheme(scheme)) {
-            if (isMainFrame && isGoogleMapsAppUrl(url)) {
+            if (isMainFrame && hasUserGesture && !isRedirect && isGoogleMapsAppUrl(url)) {
                 openPlaceInMapsApp(activity, webView, url);
                 return true;
             }
@@ -88,6 +93,10 @@ public final class BrowserUrlRouter {
 
         if (isInternalWebScheme(scheme)) {
             return false;
+        }
+
+        if (isRedirect || !hasUserGesture) {
+            return true;
         }
 
         if ("intent".equals(scheme)) {
@@ -161,13 +170,55 @@ public final class BrowserUrlRouter {
 
     public static boolean handleIncomingViewIntent(Activity activity, BrowserView webView, Uri data) {
         if (data == null) {
-            return false;
+            return true;
         }
         String url = data.toString();
         if (isWebUrl(url)) {
             return false;
         }
-        return handleUrlLoading(activity, webView, url);
+        String scheme = getScheme(url);
+        if (scheme == null || isInternalWebScheme(scheme)
+                || "intent".equals(scheme) || "android-app".equals(scheme)
+                || !isAllowedExternalAppScheme(scheme)) {
+            return true;
+        }
+        return handleUrlLoading(activity, webView, url, true, true, false);
+    }
+
+    private static boolean isAllowedExternalAppScheme(String scheme) {
+        switch (scheme) {
+            case "tel":
+            case "telprompt":
+            case "sms":
+            case "smsto":
+            case "mms":
+            case "mmsto":
+            case "mailto":
+            case "geo":
+            case "market":
+            case "maps":
+            case "google.navigation":
+            case "webcal":
+            case "whatsapp":
+            case "line":
+            case "tg":
+            case "weixin":
+            case "fb":
+            case "twitter":
+            case "x":
+            case "skype":
+            case "slack":
+            case "discord":
+            case "instagram":
+            case "snapchat":
+            case "reddit":
+            case "spotify":
+            case "zoomus":
+            case "viber":
+                return true;
+            default:
+                return false;
+        }
     }
 
     private static boolean handleIntentScheme(Activity activity, BrowserView webView, String url) {

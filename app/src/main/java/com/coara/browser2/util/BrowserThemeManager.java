@@ -81,7 +81,8 @@ public final class BrowserThemeManager {
             return size() > 4;
         }
     };
-    private static final Map<BrowserView, Boolean> PAGE_THEMED = new java.util.WeakHashMap<>();
+    private static final Map<BrowserView, String> PAGE_THEMED = new java.util.WeakHashMap<>();
+    private static final Map<BrowserView, String> START_PAGE_THEMED = new java.util.WeakHashMap<>();
     private static final java.util.concurrent.ConcurrentHashMap<Integer, String> ID_NAME_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
 
     private BrowserThemeManager() {
@@ -900,15 +901,29 @@ public final class BrowserThemeManager {
             return;
         }
         if (!url.startsWith(START_PAGE_PREFIX)) {
+            synchronized (START_PAGE_THEMED) {
+                START_PAGE_THEMED.remove(webView);
+            }
             applyPageTheme(webView, context, url);
             return;
         }
         ThemeInfo theme = getActiveTheme(context);
         if (theme == null) {
-            removeStartPageStyle(webView);
+            String previous;
+            synchronized (START_PAGE_THEMED) {
+                previous = START_PAGE_THEMED.put(webView, "");
+            }
+            if (previous == null || !previous.isEmpty()) {
+                removeStartPageStyle(webView);
+            }
             return;
         }
         String key = theme.fileName + ":" + theme.modifiedAt;
+        synchronized (START_PAGE_THEMED) {
+            if (key.equals(START_PAGE_THEMED.get(webView))) {
+                return;
+            }
+        }
         String script;
         synchronized (BrowserThemeManager.class) {
             if (key.equals(cachedScriptKey) && cachedScript != null) {
@@ -922,7 +937,22 @@ public final class BrowserThemeManager {
         }
         try {
             webView.evaluateJavascript(script, null);
+            synchronized (START_PAGE_THEMED) {
+                START_PAGE_THEMED.put(webView, key);
+            }
         } catch (Throwable ignored) {
+        }
+    }
+
+    public static void onPageStarted(BrowserView webView) {
+        if (webView == null) {
+            return;
+        }
+        synchronized (START_PAGE_THEMED) {
+            START_PAGE_THEMED.remove(webView);
+        }
+        synchronized (PAGE_THEMED) {
+            PAGE_THEMED.remove(webView);
         }
     }
 
@@ -967,11 +997,11 @@ public final class BrowserThemeManager {
             site = matchPageSite(theme, host);
         }
         if (site == null) {
-            boolean had;
+            String previous;
             synchronized (PAGE_THEMED) {
-                had = PAGE_THEMED.remove(webView) != null;
+                previous = PAGE_THEMED.remove(webView);
             }
-            if (had) {
+            if (previous != null) {
                 try {
                     webView.evaluateJavascript(pageRemoveScript(), null);
                 } catch (Throwable ignored) {
@@ -979,15 +1009,21 @@ public final class BrowserThemeManager {
             }
             return;
         }
+        String key = theme.fileName + ":" + theme.modifiedAt + ":" + site;
+        synchronized (PAGE_THEMED) {
+            if (key.equals(PAGE_THEMED.get(webView))) {
+                return;
+            }
+        }
         String script = pageScript(context, theme, site);
         if (script == null) {
             return;
         }
-        synchronized (PAGE_THEMED) {
-            PAGE_THEMED.put(webView, Boolean.TRUE);
-        }
         try {
             webView.evaluateJavascript(script, null);
+            synchronized (PAGE_THEMED) {
+                PAGE_THEMED.put(webView, key);
+            }
         } catch (Throwable ignored) {
         }
     }
