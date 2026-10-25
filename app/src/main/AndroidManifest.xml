@@ -138,12 +138,22 @@
             android:resource="@xml/icon_palette" />
 
         <activity
+            android:name=".PictureInPictureActivity"
+            android:configChanges="keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="${applicationId}.PictureInPicture"
+            android:theme="@style/Theme.MaterialComponents.Light.NoActionBar" />
+
+        <activity
             android:name=".MainActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="true"
             android:launchMode="singleTask"
             android:resizeableActivity="true"
-            android:supportsPictureInPicture="true"
             android:importantForAutofill="yes"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -176,8 +186,7 @@
             android:configChanges="keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="false"
             android:launchMode="singleTask"
-            android:resizeableActivity="true"
-            android:supportsPictureInPicture="true" />
+            android:resizeableActivity="true" />
 
         <activity
             android:name=".grepmd5appActivity"
@@ -207,7 +216,6 @@
             android:exported="false"
             android:launchMode="singleTop"
             android:resizeableActivity="true"
-            android:supportsPictureInPicture="true"
             android:taskAffinity=""
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.MaterialComponents.Light.NoActionBar" />
