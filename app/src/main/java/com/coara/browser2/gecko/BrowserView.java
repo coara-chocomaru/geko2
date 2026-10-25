@@ -132,6 +132,10 @@ public class BrowserView extends GeckoView {
     private boolean destroyed;
     private boolean fullScreen;
     private boolean pictureInPictureActive;
+    private boolean pipRequestPending;
+    private boolean pipRequestTokenReceived;
+    private int pipRequestGeneration;
+    private Runnable pipNoVideoFallback;
     private boolean mediaPlaying;
     private MediaSession activeMediaSession;
     private String mediaTitle = "";
@@ -260,19 +264,21 @@ public class BrowserView extends GeckoView {
         s.setPictureInPictureDelegate(new PictureInPictureController.SessionPictureInPicture.Delegate() {
             @Override
             public void onEnterPictureInPicture(GeckoSession sourceSession, String placementToken) {
-                if (placementToken == null || placementToken.isEmpty()) {
+                if (sourceSession != session || destroyed || placementToken == null || placementToken.isEmpty()) {
                     try {
                         sourceSession.getSessionPictureInPicture().exit();
                     } catch (Throwable ignored) {
                     }
+                    setPictureInPictureActive(false);
                     return;
                 }
+                pipRequestTokenReceived = true;
                 setPictureInPictureActive(true);
                 BrowserClient c = client;
                 if (c != null) {
                     c.onPictureInPictureRequested(BrowserView.this, placementToken);
                 } else {
-                    setPictureInPictureActive(false);
+                    rejectPictureInPictureRequest();
                 }
             }
 
@@ -406,16 +412,71 @@ public class BrowserView extends GeckoView {
         return !destroyed && mediaPlaying && activeMediaSession != null;
     }
 
+    public boolean isNotificationMediaSession() {
+        return isMediaPlaying() && com.coara.browser2.MediaPlaybackService.isActiveSession(activeMediaSession);
+    }
+
     public boolean requestPictureInPicture() {
+        return requestPictureInPicture(null);
+    }
+
+    public boolean requestPictureInPicture(Runnable noVideoFallback) {
         GeckoSession current = session;
-        if (current == null || destroyed || !isMediaPlaying() || pictureInPictureActive) {
+        if (current == null || destroyed || pictureInPictureActive || pipRequestPending) {
             return false;
         }
+        pipRequestPending = true;
+        pipRequestTokenReceived = false;
+        pipNoVideoFallback = noVideoFallback;
+        int requestGeneration = ++pipRequestGeneration;
+        setPictureInPictureActive(true);
         try {
-            current.getSessionPictureInPicture().request().accept(value -> { }, error -> { });
+            current.getSessionPictureInPicture().request().accept(value -> main.post(() -> {
+                if (requestGeneration != pipRequestGeneration || current != session) {
+                    return;
+                }
+                pipRequestPending = false;
+                if (!pipRequestTokenReceived) {
+                    setPictureInPictureActive(false);
+                    runPipNoVideoFallback();
+                } else {
+                    pipNoVideoFallback = null;
+                }
+            }), error -> main.post(() -> {
+                if (requestGeneration != pipRequestGeneration || current != session) {
+                    return;
+                }
+                pipRequestPending = false;
+                rejectPictureInPictureRequest();
+            }));
             return true;
         } catch (Throwable ignored) {
+            if (requestGeneration == pipRequestGeneration) {
+                pipRequestPending = false;
+                pipNoVideoFallback = null;
+                setPictureInPictureActive(false);
+            }
             return false;
+        }
+    }
+
+    private void runPipNoVideoFallback() {
+        Runnable fallback = pipNoVideoFallback;
+        pipNoVideoFallback = null;
+        if (fallback != null) {
+            fallback.run();
+        }
+    }
+
+    public void stopMediaPlayback() {
+        MediaSession current = activeMediaSession;
+        if (current != null) {
+            try {
+                current.stop();
+            } catch (RuntimeException ignored) {
+            }
+        } else if (session != null) {
+            com.coara.browser2.MediaPlaybackService.stopRetainedPlayback(session);
         }
     }
 
@@ -438,6 +499,10 @@ public class BrowserView extends GeckoView {
             return;
         }
         destroyed = true;
+        pipRequestGeneration++;
+        pipRequestPending = false;
+        pipRequestTokenReceived = false;
+        pipNoVideoFallback = null;
         com.coara.browser2.util.PageTranslator.releaseForView(this);
         findToken++;
         pendingFindRequests.clear();
@@ -466,7 +531,8 @@ public class BrowserView extends GeckoView {
         try { retained.setContentBlockingDelegate(null); } catch (Throwable ignored) { }
         try { retained.setPictureInPictureDelegate(null); } catch (Throwable ignored) { }
         com.coara.browser2.MediaPlaybackService.retainGeckoSession(getContext(), retained, mediaSession,
-                playing, mediaDisplayTitle(), mediaDisplayArtist());
+                playing, privateMode ? "プライベート再生" : mediaDisplayTitle(),
+                privateMode ? "Coara Gecko" : mediaDisplayArtist(), privateMode);
         topPort = null;
         framePorts.clear();
         client = null;
@@ -790,6 +856,9 @@ public class BrowserView extends GeckoView {
     }
 
     public void rejectPictureInPictureRequest() {
+        pipRequestGeneration++;
+        pipRequestPending = false;
+        pipRequestTokenReceived = false;
         if (session != null) {
             try {
                 session.getSessionPictureInPicture().exit();
@@ -797,6 +866,7 @@ public class BrowserView extends GeckoView {
             }
         }
         setPictureInPictureActive(false);
+        runPipNoVideoFallback();
     }
 
     public void reloadForSettings() {
@@ -2159,6 +2229,10 @@ public class BrowserView extends GeckoView {
             notifyMediaState(mediaSessionToStop, false, true);
         }
         destroyed = true;
+        pipRequestGeneration++;
+        pipRequestPending = false;
+        pipRequestTokenReceived = false;
+        pipNoVideoFallback = null;
         com.coara.browser2.util.PageTranslator.releaseForView(this);
         findToken++;
         pendingFindRequests.clear();
