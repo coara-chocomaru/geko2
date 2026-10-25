@@ -22,7 +22,6 @@ import android.text.TextUtils;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.ActivityCompat;
-import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
 
 import com.coara.browser2.util.BrowserConstants;
@@ -36,15 +35,19 @@ public final class MediaPlaybackService extends Service {
     private static final String CHANNEL_ID = "coara_media_playback";
     private static final int NOTIFICATION_ID = 7402;
     private static final String ACTION_UPDATE = "com.coara.browser2.media.UPDATE";
-    private static final String ACTION_PLAY = "com.coara.browser2.media.PLAY";
-    private static final String ACTION_PAUSE = "com.coara.browser2.media.PAUSE";
-    private static final String ACTION_STOP = "com.coara.browser2.media.STOP";
+    public static final String ACTION_PLAY = "com.coara.browser2.media.PLAY";
+    public static final String ACTION_PAUSE = "com.coara.browser2.media.PAUSE";
+    public static final String ACTION_STOP = "com.coara.browser2.media.STOP";
+    public static final String ACTION_SEEK_BACK = "com.coara.browser2.media.SEEK_BACK";
+    public static final String ACTION_SEEK_FORWARD = "com.coara.browser2.media.SEEK_FORWARD";
     private static final String ACTION_DISMISS = "com.coara.browser2.media.DISMISS";
     private static final String EXTRA_VERSION = "state_version";
     private static final String EXTRA_ENDED = "state_ended";
     private static final int NOTIFICATION_PERMISSION_REQUEST = 7406;
     private static final String NOTIFICATION_PERMISSION_ASKED = "media_notification_permission_asked";
     private static final Object LOCK = new Object();
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static volatile WeakReference<MediaPlaybackService> instance = new WeakReference<>(null);
     private static WeakReference<MediaSession> activeSession = new WeakReference<>(null);
     private static GeckoSession activeOwnerSession;
     private static GeckoSession retainedGeckoSession;
@@ -66,7 +69,71 @@ public final class MediaPlaybackService extends Service {
     private boolean audioFocusPending;
     private boolean transientFocusLoss;
     private long lastAppliedVersion = -1L;
+    private boolean stopping;
+    private int lastStartId;
     private final AudioManager.OnAudioFocusChangeListener audioFocusChangeListener = this::onAudioFocusChanged;
+
+    public static boolean isPlaying() {
+        synchronized (LOCK) {
+            return activeSession.get() != null && activePlaying;
+        }
+    }
+
+    public static PendingIntent controlIntent(Context context, String action, int requestCode) {
+        Intent intent = new Intent(context, MediaPlaybackService.class).setAction(action);
+        return PendingIntent.getService(context, requestCode, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    public static void pauseActive() {
+        final MediaSession session;
+        synchronized (LOCK) {
+            session = activeSession.get();
+        }
+        if (session == null) {
+            return;
+        }
+        runOnMain(() -> {
+            try {
+                session.pause();
+            } catch (RuntimeException ignored) {
+            }
+        });
+    }
+
+    private static void runOnMain(Runnable runnable) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            runnable.run();
+        } else {
+            MAIN.post(runnable);
+        }
+    }
+
+    private static void deliverState(Context context, long version, boolean ended, boolean isPlaying,
+                                     String mediaTitle, String mediaArtist) {
+        if (context == null) {
+            return;
+        }
+        final String nextTitle = normalize(mediaTitle, "メディア再生");
+        final String nextArtist = normalize(mediaArtist, "Coara Gecko");
+        final MediaPlaybackService live = instance.get();
+        if (live != null && !live.stopping) {
+            runOnMain(() -> live.applyState(version, ended, isPlaying, nextTitle, nextArtist, false));
+            return;
+        }
+        if (ended) {
+            NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (manager != null) {
+                manager.cancel(NOTIFICATION_ID);
+            }
+            return;
+        }
+        try {
+            ContextCompat.startForegroundService(context,
+                    updateIntent(context, version, false, isPlaying, nextTitle, nextArtist));
+        } catch (RuntimeException ignored) {
+        }
+    }
 
     public static boolean isActiveSession(MediaSession session) {
         synchronized (LOCK) {
@@ -127,7 +194,7 @@ public final class MediaPlaybackService extends Service {
             version = ++stateVersion;
         }
         if (oldSession != null) {
-            MediaPipActivity.closeForSession(oldSession);
+            PictureInPictureHost.closeForSession(oldSession);
             closeRetainedSession(oldSession);
         }
         try {
@@ -171,7 +238,7 @@ public final class MediaPlaybackService extends Service {
             @Override
             public void onStop(GeckoSession sourceSession, MediaSession changedSession) {
                 if (sourceSession == geckoSession) {
-                    MediaPipActivity.closeForSession(geckoSession);
+                    PictureInPictureHost.closeForSession(geckoSession);
                     onPlaybackState(app, geckoSession, changedSession, false, true, currentRetainedTitle(), currentRetainedArtist());
                     releaseRetainedSession(geckoSession);
                 }
@@ -180,17 +247,13 @@ public final class MediaPlaybackService extends Service {
             @Override
             public void onDeactivated(GeckoSession sourceSession, MediaSession changedSession) {
                 if (sourceSession == geckoSession) {
-                    MediaPipActivity.closeForSession(geckoSession);
+                    PictureInPictureHost.closeForSession(geckoSession);
                     onPlaybackState(app, geckoSession, changedSession, false, true, currentRetainedTitle(), currentRetainedArtist());
                     releaseRetainedSession(geckoSession);
                 }
             }
         });
-        try {
-            Intent update = updateIntent(app, version, false, isPlaying, mediaTitle, mediaArtist);
-            ContextCompat.startForegroundService(app, update);
-        } catch (RuntimeException ignored) {
-        }
+        deliverState(app, version, false, isPlaying, mediaTitle, mediaArtist);
     }
 
     public static void onPipClosed(GeckoSession session) {
@@ -352,11 +415,7 @@ public final class MediaPlaybackService extends Service {
             version = ++stateVersion;
         }
         if (publish) {
-            try {
-                ContextCompat.startForegroundService(app, updateIntent(app, version,
-                        false, nextPlaying, mediaTitle, mediaArtist));
-            } catch (RuntimeException ignored) {
-            }
+            deliverState(app, version, false, nextPlaying, mediaTitle, mediaArtist);
         }
     }
 
@@ -449,18 +508,11 @@ public final class MediaPlaybackService extends Service {
             version = ++stateVersion;
         }
         if (retainedToClose != null) {
-            MediaPipActivity.closeForSession(retainedToClose);
+            PictureInPictureHost.closeForSession(retainedToClose);
             closeRetainedSession(retainedToClose);
         }
-        if (ended) {
-            postEndedState(appContext, version, mediaTitle, mediaArtist);
-            return;
-        }
-        Intent intent = updateIntent(appContext, version, false, isPlaying, mediaTitle, mediaArtist);
-        try {
-            ContextCompat.startForegroundService(appContext, intent);
-        } catch (RuntimeException ignored) {
-        }
+        deliverState(appContext, version, ended, isPlaying && !ended, mediaTitle, mediaArtist);
+        PictureInPictureHost.onPlaybackStateChanged();
     }
 
     public static void onMetadata(Context context, MediaSession session, String mediaTitle, String mediaArtist) {
@@ -489,11 +541,7 @@ public final class MediaPlaybackService extends Service {
             }
             version = ++stateVersion;
         }
-        try {
-            ContextCompat.startForegroundService(app, updateIntent(app, version,
-                    false, isPlaying, mediaTitle, mediaArtist));
-        } catch (RuntimeException ignored) {
-        }
+        deliverState(app, version, false, isPlaying, mediaTitle, mediaArtist);
     }
 
     private static String currentRetainedTitle() {
@@ -520,29 +568,13 @@ public final class MediaPlaybackService extends Service {
     }
 
     private static void postEndedState(Context context, long version, String mediaTitle, String mediaArtist) {
-        if (context == null) {
-            return;
-        }
-        try {
-            context.startService(updateIntent(context, version, true, false, mediaTitle, mediaArtist));
-        } catch (RuntimeException ignored) {
-            boolean stillCurrent;
-            synchronized (LOCK) {
-                stillCurrent = stateVersion <= version && !activePlaying;
-            }
-            if (stillCurrent) {
-                NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID);
-                try {
-                    context.stopService(new Intent(context, MediaPlaybackService.class));
-                } catch (RuntimeException ignoredAgain) {
-                }
-            }
-        }
+        deliverState(context, version, true, false, mediaTitle, mediaArtist);
     }
 
     @Override
     public void onCreate() {
         super.onCreate();
+        instance = new WeakReference<>(this);
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         platformMediaSession = new android.media.session.MediaSession(this, "Coara Gecko Media");
         platformMediaSession.setFlags(android.media.session.MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
@@ -550,17 +582,27 @@ public final class MediaPlaybackService extends Service {
         platformMediaSession.setCallback(new android.media.session.MediaSession.Callback() {
             @Override
             public void onPlay() {
-                dispatchMediaAction(ACTION_PLAY);
+                handleControl(ACTION_PLAY);
             }
 
             @Override
             public void onPause() {
-                dispatchMediaAction(ACTION_PAUSE);
+                handleControl(ACTION_PAUSE);
             }
 
             @Override
             public void onStop() {
-                dispatchMediaAction(ACTION_STOP);
+                handleControl(ACTION_STOP);
+            }
+
+            @Override
+            public void onFastForward() {
+                handleControl(ACTION_SEEK_FORWARD);
+            }
+
+            @Override
+            public void onRewind() {
+                handleControl(ACTION_SEEK_BACK);
             }
         });
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -575,90 +617,140 @@ public final class MediaPlaybackService extends Service {
         }
     }
 
-    private void dispatchMediaAction(String action) {
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        lastStartId = startId;
+        stopping = false;
+        if (intent == null) {
+            stopSelfSafely();
+            return START_NOT_STICKY;
+        }
+        String action = intent.getAction();
+        if (ACTION_UPDATE.equals(action)) {
+            applyState(intent.getLongExtra(EXTRA_VERSION, 0L), intent.getBooleanExtra(EXTRA_ENDED, false),
+                    intent.getBooleanExtra("playing", true),
+                    normalize(intent.getStringExtra("title"), "メディア再生"),
+                    normalize(intent.getStringExtra("artist"), "Coara Gecko"), true);
+            return START_NOT_STICKY;
+        }
+        if (ACTION_PLAY.equals(action) || ACTION_PAUSE.equals(action) || ACTION_STOP.equals(action)
+                || ACTION_DISMISS.equals(action) || ACTION_SEEK_BACK.equals(action)
+                || ACTION_SEEK_FORWARD.equals(action)) {
+            handleControl(action);
+            return START_NOT_STICKY;
+        }
+        stopSelfSafely();
+        return START_NOT_STICKY;
+    }
+
+    private void applyState(long version, boolean ended, boolean isPlaying, String nextTitle,
+                            String nextArtist, boolean fromStart) {
+        boolean stale = version > 0L && version < lastAppliedVersion;
+        if (ended) {
+            if (stale && !fromStart) {
+                return;
+            }
+            if (version > 0L) {
+                lastAppliedVersion = Math.max(lastAppliedVersion, version);
+            }
+            endPlayback();
+            return;
+        }
+        if (version > 0L && !stale) {
+            lastAppliedVersion = version;
+        }
+        if (!stale) {
+            title = nextTitle;
+            artist = nextArtist;
+            playing = isPlaying;
+        }
+        presentState(fromStart);
+    }
+
+    private void presentState(boolean mustForeground) {
+        Notification notification = buildNotification();
+        if (playing) {
+            enterForeground(notification);
+            requestAudioFocus();
+        } else {
+            if (mustForeground || foregroundStarted) {
+                enterForeground(notification);
+            }
+            if (foregroundStarted) {
+                try {
+                    stopForeground(STOP_FOREGROUND_DETACH);
+                } catch (RuntimeException ignored) {
+                }
+                foregroundStarted = false;
+            }
+            postNotification(notification);
+            if (!transientFocusLoss) {
+                abandonAudioFocus();
+            }
+        }
+        updatePlatformMediaSession();
+    }
+
+    private void enterForeground(Notification notification) {
         try {
-            startService(new Intent(this, MediaPlaybackService.class).setAction(action));
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+            } else {
+                startForeground(NOTIFICATION_ID, notification);
+            }
+            foregroundStarted = true;
+        } catch (RuntimeException error) {
+            foregroundStarted = false;
+            postNotification(notification);
+        }
+    }
+
+    private void postNotification(Notification notification) {
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager == null) {
+            return;
+        }
+        try {
+            manager.notify(NOTIFICATION_ID, notification);
         } catch (RuntimeException ignored) {
         }
     }
 
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent == null) {
-            stopSelfResult(startId);
-            return START_NOT_STICKY;
-        }
-        String action = intent.getAction();
-        if (ACTION_PLAY.equals(action) || ACTION_PAUSE.equals(action)) {
-            MediaSession session;
-            synchronized (LOCK) {
-                session = activeSession.get();
-            }
-            if (session == null) {
-                abandonAudioFocus();
-                stopForeground(STOP_FOREGROUND_REMOVE);
-                foregroundStarted = false;
-                NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID);
-                stopPlatformMediaSession();
-                stopSelfResult(startId);
-                return START_NOT_STICKY;
-            }
-            playing = ACTION_PLAY.equals(action);
-            if (playing) {
-                transientFocusLoss = false;
-            } else {
-                transientFocusLoss = false;
-                abandonAudioFocus();
-            }
-            try {
-                if (playing) {
-                    session.play();
-                } else {
-                    session.pause();
-                }
-            } catch (RuntimeException ignored) {
-            }
-            startPlaybackForeground(buildNotification());
-            return START_NOT_STICKY;
-        }
+    private void handleControl(String action) {
         if (ACTION_STOP.equals(action) || ACTION_DISMISS.equals(action)) {
-            stopActivePlayback(startId);
-            return START_NOT_STICKY;
+            stopActivePlayback();
+            return;
         }
-        if (ACTION_UPDATE.equals(action)) {
-            long version = intent.getLongExtra(EXTRA_VERSION, 0L);
-            if (version > 0L && version < lastAppliedVersion) {
-                if (!foregroundStarted) {
-                    stopSelfResult(startId);
-                }
-                return START_NOT_STICKY;
-            }
-            if (version > 0L) {
-                lastAppliedVersion = version;
-            }
-            if (intent.getBooleanExtra(EXTRA_ENDED, false)) {
-                abandonAudioFocus();
+        MediaSession session;
+        synchronized (LOCK) {
+            session = activeSession.get();
+        }
+        if (session == null) {
+            endPlayback();
+            return;
+        }
+        try {
+            if (ACTION_PLAY.equals(action)) {
+                playing = true;
+                transientFocusLoss = false;
+                session.play();
+                presentState(false);
+            } else if (ACTION_PAUSE.equals(action)) {
                 playing = false;
-                title = "メディア再生";
-                artist = "Coara Gecko";
-                stopPlatformMediaSession();
-                stopForeground(STOP_FOREGROUND_REMOVE);
-                foregroundStarted = false;
-                NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID);
-                stopSelfResult(startId);
-                return START_NOT_STICKY;
+                transientFocusLoss = false;
+                session.pause();
+                presentState(false);
+            } else if (ACTION_SEEK_BACK.equals(action)) {
+                session.seekBackward();
+            } else if (ACTION_SEEK_FORWARD.equals(action)) {
+                session.seekForward();
             }
-            title = normalize(intent.getStringExtra("title"), "メディア再生");
-            artist = normalize(intent.getStringExtra("artist"), "Coara Gecko");
-            playing = intent.getBooleanExtra("playing", true);
-            startPlaybackForeground(buildNotification());
-            return START_NOT_STICKY;
+        } catch (RuntimeException ignored) {
         }
-        stopSelfResult(startId);
-        return START_NOT_STICKY;
+        PictureInPictureHost.onPlaybackStateChanged();
     }
 
-    private void stopActivePlayback(int startId) {
+    private void stopActivePlayback() {
         MediaSession session;
         GeckoSession retained;
         long version;
@@ -675,7 +767,7 @@ public final class MediaPlaybackService extends Service {
             retainedMediaSession = null;
             version = ++stateVersion;
         }
-        MediaPipActivity.closeActive();
+        PictureInPictureHost.closeActive();
         if (session != null) {
             try {
                 session.stop();
@@ -683,16 +775,38 @@ public final class MediaPlaybackService extends Service {
             }
         }
         if (retained != null) {
-            MediaPipActivity.closeForSession(retained);
+            PictureInPictureHost.closeForSession(retained);
             closeRetainedSession(retained);
         }
+        lastAppliedVersion = Math.max(lastAppliedVersion, version);
+        endPlayback();
+    }
+
+    private void endPlayback() {
+        playing = false;
+        title = "メディア再生";
+        artist = "Coara Gecko";
+        transientFocusLoss = false;
         abandonAudioFocus();
         stopPlatformMediaSession();
-        stopForeground(STOP_FOREGROUND_REMOVE);
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE);
+        } catch (RuntimeException ignored) {
+        }
         foregroundStarted = false;
-        NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID);
-        lastAppliedVersion = Math.max(lastAppliedVersion, version);
-        stopSelfResult(startId);
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) {
+            manager.cancel(NOTIFICATION_ID);
+        }
+        stopSelfSafely();
+        PictureInPictureHost.onPlaybackStateChanged();
+    }
+
+    private void stopSelfSafely() {
+        stopping = true;
+        if (!stopSelfResult(lastStartId)) {
+            stopping = false;
+        }
     }
 
     private void requestAudioFocus() {
@@ -772,21 +886,6 @@ public final class MediaPlaybackService extends Service {
         }
     }
 
-    private void startPlaybackForeground(Notification notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
-        } else {
-            startForeground(NOTIFICATION_ID, notification);
-        }
-        foregroundStarted = true;
-        updatePlatformMediaSession();
-        if (playing) {
-            requestAudioFocus();
-        } else if (!transientFocusLoss) {
-            abandonAudioFocus();
-        }
-    }
-
     private void updatePlatformMediaSession() {
         android.media.session.MediaSession platform = platformMediaSession;
         if (platform == null) {
@@ -841,35 +940,29 @@ public final class MediaPlaybackService extends Service {
         PendingIntent content = PendingIntent.getActivity(this, 7402, openIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification.Builder builder = new Notification.Builder(this, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_download)
+                .setSmallIcon(R.drawable.ic_media_notification)
                 .setContentTitle(title)
                 .setContentText(artist)
                 .setContentIntent(content)
                 .setCategory(Notification.CATEGORY_TRANSPORT)
                 .setVisibility(Notification.VISIBILITY_PRIVATE)
                 .setOnlyAlertOnce(true)
-                .setOngoing(false)
-                .setDeleteIntent(serviceAction(ACTION_DISMISS, 7406))
+                .setOngoing(playing)
+                .setDeleteIntent(controlIntent(this, ACTION_DISMISS, 7406))
                 .setShowWhen(false)
                 .setPriority(Notification.PRIORITY_LOW);
         builder.addAction(new Notification.Action.Builder(
                 playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
                 playing ? "一時停止" : "再生",
-                serviceAction(playing ? ACTION_PAUSE : ACTION_PLAY, playing ? 7403 : 7404)).build());
+                controlIntent(this, playing ? ACTION_PAUSE : ACTION_PLAY, playing ? 7403 : 7404)).build());
         builder.addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel,
-                "停止", serviceAction(ACTION_STOP, 7405)).build());
+                "停止", controlIntent(this, ACTION_STOP, 7405)).build());
         if (platformMediaSession != null) {
             builder.setStyle(new Notification.MediaStyle()
                     .setMediaSession(platformMediaSession.getSessionToken())
                     .setShowActionsInCompactView(0, 1));
         }
         return builder.build();
-    }
-
-    private PendingIntent serviceAction(String action, int requestCode) {
-        Intent intent = new Intent(this, MediaPlaybackService.class).setAction(action);
-        return PendingIntent.getService(this, requestCode, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 
     private static String normalize(String value, String fallback) {
@@ -885,9 +978,19 @@ public final class MediaPlaybackService extends Service {
 
     @Override
     public void onDestroy() {
+        if (instance.get() == this) {
+            instance = new WeakReference<>(null);
+        }
         abandonAudioFocus();
-        stopForeground(STOP_FOREGROUND_REMOVE);
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE);
+        } catch (RuntimeException ignored) {
+        }
         foregroundStarted = false;
+        NotificationManager notificationManager = getSystemService(NotificationManager.class);
+        if (notificationManager != null) {
+            notificationManager.cancel(NOTIFICATION_ID);
+        }
         android.media.session.MediaSession platform = platformMediaSession;
         platformMediaSession = null;
         if (platform != null) {
