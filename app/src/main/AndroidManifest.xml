@@ -202,7 +202,7 @@
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
             android:excludeFromRecents="true"
             android:exported="false"
-            android:launchMode="singleTop"
+            android:launchMode="singleTask"
             android:resizeableActivity="true"
             android:supportsPictureInPicture="true"
             android:taskAffinity=""
