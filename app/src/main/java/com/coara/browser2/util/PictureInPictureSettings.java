@@ -14,7 +14,18 @@ import android.widget.Toast;
 public final class PictureInPictureSettings {
     private static final String ACTION_PIP_SETTINGS = "android.settings.PICTURE_IN_PICTURE_SETTINGS";
 
+    private static volatile boolean cachedEnabled;
+
     private PictureInPictureSettings() {
+    }
+
+    public static boolean isCachedEnabled() {
+        return cachedEnabled;
+    }
+
+    public static boolean sync(boolean enabled) {
+        cachedEnabled = enabled;
+        return enabled;
     }
 
     public static boolean isSystemPipAllowed(Context context) {

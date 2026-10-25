@@ -24,6 +24,7 @@ public final class PictureInPictureAspectRatio {
     private static final Map<BrowserView, Rational> CACHE = new WeakHashMap<>();
     private static final Map<BrowserView, Long> LAST_QUERY = new WeakHashMap<>();
     private static final Map<BrowserView, PendingQuery> PENDING = new WeakHashMap<>();
+    private static final Map<BrowserView, Boolean> FOUND = new WeakHashMap<>();
     private static long nextGeneration;
 
     private static final String QUERY_SCRIPT = "(function(){try{var best=null,visited=[];function consider(w,h,score){w=Math.round(Number(w)||0);h=Math.round(Number(h)||0);if(w>0&&h>0&&(!best||score>best.score))best={w:w,h:h,score:score};}function scan(d,depth){if(!d||depth>5||visited.indexOf(d)>=0)return;visited.push(d);var docStrong=false;var fs=null;try{fs=d.fullscreenElement||d.webkitFullscreenElement||null}catch(e){}var vids=[];try{vids=d.querySelectorAll('video')}catch(e){}for(var i=0;i<vids.length;i++){var v=vids[i],r=null,st=null;try{r=v.getBoundingClientRect();st=d.defaultView.getComputedStyle(v)}catch(e){}var playing=false,ready=false,full=false,pip=false,visible=false;try{playing=!v.paused&&!v.ended;ready=v.readyState>=2;full=fs===v||!!(fs&&fs.contains&&fs.contains(v));pip=d.pictureInPictureElement===v||v.webkitPresentationMode==='picture-in-picture';visible=!!r&&r.width>0&&r.height>0&&(!st||(st.display!=='none'&&st.visibility!=='hidden'&&Number(st.opacity)!==0))}catch(e){}if(!visible&&!playing&&!full&&!pip)continue;if(playing||full||pip)docStrong=true;var w=Number(v.videoWidth)||0,h=Number(v.videoHeight)||0;if((w<=0||h<=0)&&r){w=r.width;h=r.height}var area=r?Math.min(100000000,r.width*r.height):0;var score=(pip?1000000000000000:0)+(full?1000000000000:0)+(playing?1000000000:0)+(ready?10000000:0)+(visible?1000000:0)+area;consider(w,h,score)}var frames=[];try{frames=d.querySelectorAll('iframe,frame')}catch(e){}for(var j=0;j<frames.length;j++){var f=frames[j],fr=null,ffd=null,fullFrame=false;try{fr=f.getBoundingClientRect();fullFrame=fs===f||!!(fs&&fs.contains&&fs.contains(f));ffd=f.contentDocument}catch(e){}if(fullFrame&&fr&&fr.width>0&&fr.height>0)consider(fr.width,fr.height,1500000000);if(ffd){try{scan(ffd,depth+1)}catch(e){}}}if(depth<3&&!docStrong){var all=[];try{all=d.querySelectorAll('*')}catch(e){}for(var k=0;k<all.length;k++){try{if(all[k].shadowRoot)scan(all[k].shadowRoot,depth+1)}catch(e){}}}}scan(document,0);return best?{w:best.w,h:best.h,found:true}:{found:false}}catch(e){return {found:false}}})()";
@@ -43,6 +44,25 @@ public final class PictureInPictureAspectRatio {
 
     public static Rational defaultAspectRatio() {
         return DEFAULT_RATIO;
+    }
+
+    public static int videoState(BrowserView view) {
+        if (view == null) {
+            return 0;
+        }
+        synchronized (LOCK) {
+            Boolean found = FOUND.get(view);
+            return found == null ? 0 : (found ? 1 : -1);
+        }
+    }
+
+    public static void reset(BrowserView view) {
+        if (view == null) {
+            return;
+        }
+        synchronized (LOCK) {
+            FOUND.remove(view);
+        }
     }
 
     public static Rational getCached(BrowserView view) {
@@ -89,10 +109,27 @@ public final class PictureInPictureAspectRatio {
         try {
             view.evaluateJavascript(QUERY_SCRIPT, value -> {
                 Rational ratio = parse(value);
+                Boolean found = parseFound(value);
+                if (found != null) {
+                    synchronized (LOCK) {
+                        FOUND.put(view, found);
+                    }
+                }
                 complete(view, request.generation, ratio);
             });
         } catch (Throwable error) {
             complete(view, request.generation, null);
+        }
+    }
+
+    private static Boolean parseFound(String value) {
+        if (value == null || value.isEmpty() || "null".equals(value)) {
+            return null;
+        }
+        try {
+            return new JSONObject(value).optBoolean("found", false);
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 
