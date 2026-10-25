@@ -1,10 +1,13 @@
 package com.coara.browser2.util;
 
 import android.app.Activity;
+import android.app.AppOpsManager;
+import android.content.Context;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Process;
 import android.provider.Settings;
 import android.widget.Toast;
 
@@ -12,6 +15,24 @@ public final class PictureInPictureSettings {
     private static final String ACTION_PIP_SETTINGS = "android.settings.PICTURE_IN_PICTURE_SETTINGS";
 
     private PictureInPictureSettings() {
+    }
+
+    public static boolean isSystemPipAllowed(Context context) {
+        if (context == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.O
+                || !context.getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
+            return false;
+        }
+        AppOpsManager appOps = (AppOpsManager) context.getSystemService(Context.APP_OPS_SERVICE);
+        if (appOps == null) {
+            return true;
+        }
+        try {
+            int mode = appOps.checkOpNoThrow(AppOpsManager.OPSTR_PICTURE_IN_PICTURE,
+                    Process.myUid(), context.getPackageName());
+            return mode != AppOpsManager.MODE_IGNORED && mode != AppOpsManager.MODE_ERRORED;
+        } catch (RuntimeException ignored) {
+            return true;
+        }
     }
 
     public static void open(Activity activity) {
