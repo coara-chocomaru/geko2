@@ -143,6 +143,7 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
             android:importantForAutofill="yes"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -174,7 +175,9 @@
             android:name=".SecretActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="false"
-            android:launchMode="singleTask" />
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true" />
 
         <activity
             android:name=".grepmd5appActivity"
