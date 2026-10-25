@@ -337,6 +337,9 @@ public class BrowserView extends GeckoView {
                 mediaPlaying = true;
                 sourceSession.getSettings().setSuspendMediaWhenInactive(false);
                 notifyMediaState(mediaSession, true, false);
+                if (com.coara.browser2.util.PictureInPictureSettings.isCachedEnabled()) {
+                    com.coara.browser2.util.PictureInPictureAspectRatio.query(BrowserView.this, true, null);
+                }
             }
 
             @Override
@@ -357,7 +360,7 @@ public class BrowserView extends GeckoView {
                 mediaPlaying = false;
                 sourceSession.getSettings().setSuspendMediaWhenInactive(true);
                 notifyMediaState(mediaSession, false, true);
-                com.coara.browser2.MediaPipActivity.closeForSource(BrowserView.this);
+                com.coara.browser2.PictureInPictureHost.closeForSource(BrowserView.this);
                 activeMediaSession = null;
             }
 
@@ -372,7 +375,7 @@ public class BrowserView extends GeckoView {
                 sourceSession.getSettings().setSuspendMediaWhenInactive(true);
                 if (wasPlaying) {
                     notifyMediaState(mediaSession, false, true);
-                    com.coara.browser2.MediaPipActivity.closeForSource(BrowserView.this);
+                    com.coara.browser2.PictureInPictureHost.closeForSource(BrowserView.this);
                 } else {
                     BrowserClient c = client;
                     if (c != null) {
@@ -2415,12 +2418,13 @@ public class BrowserView extends GeckoView {
             mediaPlaying = false;
             mediaTitle = "";
             mediaArtist = "";
+            com.coara.browser2.util.PictureInPictureAspectRatio.reset(BrowserView.this);
             s.getSettings().setSuspendMediaWhenInactive(true);
             if (previousMediaSession != null) {
                 notifyMediaState(previousMediaSession, false, true);
             }
             if (pictureInPictureActive) {
-                com.coara.browser2.MediaPipActivity.closeForSource(BrowserView.this);
+                com.coara.browser2.PictureInPictureHost.closeForSource(BrowserView.this);
             }
             if (uri != null) {
                 if (isWebUrl(url) && !url.equals(uri)) {
