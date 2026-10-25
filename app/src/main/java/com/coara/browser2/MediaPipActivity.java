@@ -104,8 +104,15 @@ public final class MediaPipActivity extends AppCompatActivity {
             pendingPip = request;
         }
         try {
-            Intent intent = new Intent(context, MediaPipActivity.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (host instanceof MainActivity) {
+                ((MainActivity) host).disableHostPipForGeckoRequest();
+            } else if (host instanceof SecretActivity) {
+                ((SecretActivity) host).disableHostPipForGeckoRequest();
+            }
+            Intent intent = new Intent(context, MediaPipActivity.class);
+            if (!(context instanceof Activity)) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            }
             context.startActivity(intent);
             return true;
         } catch (RuntimeException error) {
@@ -114,6 +121,17 @@ public final class MediaPipActivity extends AppCompatActivity {
             source.setPictureInPictureActive(false);
             return false;
         }
+    }
+
+    public static boolean hasActiveOrPendingWindow() {
+        synchronized (LOCK) {
+            if (pendingPip != null) {
+                return true;
+            }
+        }
+        MediaPipActivity activity = activeActivity.get();
+        return activity != null && !activity.closing && !activity.isFinishing()
+                && (activity.pipSession != null || activity.getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.CREATED));
     }
 
     public static void closeForSource(BrowserView source) {
@@ -436,17 +454,20 @@ public final class MediaPipActivity extends AppCompatActivity {
         BrowserView source = sourceView.get();
         Activity host = sourceHost.get();
         if (source != null && host != null && !host.isFinishing() && !host.isDestroyed()) {
-            synchronized (LOCK) {
-                returnSourceView = new WeakReference<>(source);
-                returnSourceHost = new WeakReference<>(host);
-            }
-            try {
-                Intent intent = new Intent(host, host.getClass())
-                        .setAction(ACTION_RETURN_TO_SOURCE)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP
-                                | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                host.startActivity(intent);
-            } catch (RuntimeException ignored) {
+            boolean hostAlreadyResumed = host instanceof AppCompatActivity
+                    && ((AppCompatActivity) host).getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED);
+            if (!hostAlreadyResumed) {
+                synchronized (LOCK) {
+                    returnSourceView = new WeakReference<>(source);
+                    returnSourceHost = new WeakReference<>(host);
+                }
+                try {
+                    Intent intent = new Intent(host, host.getClass())
+                            .setAction(ACTION_RETURN_TO_SOURCE)
+                            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                    host.startActivity(intent);
+                } catch (RuntimeException ignored) {
+                }
             }
         }
         finishWindow(true, false);
@@ -515,7 +536,7 @@ public final class MediaPipActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         if (!closing && pipSession != null) {
-            finishWindow(true, enteredPip && !returnToSourceOnResume);
+            finishWindow(true, false);
         }
         clearActiveActivity();
         super.onDestroy();
