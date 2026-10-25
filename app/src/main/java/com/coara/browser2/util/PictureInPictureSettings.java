@@ -35,6 +35,19 @@ public final class PictureInPictureSettings {
         }
     }
 
+
+    public static void showSystemPipDisabled(Context context) {
+        if (context != null) {
+            Toast.makeText(context, "Androidのアプリ設定で小窓表示（PiP）を許可してください", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    public static void showStartFailed(Context context) {
+        if (context != null) {
+            Toast.makeText(context, "小窓表示を開始できませんでした。AndroidのPiP許可と再生中の動画を確認してください", Toast.LENGTH_LONG).show();
+        }
+    }
+
     public static void open(Activity activity) {
         if (activity == null) {
             return;
