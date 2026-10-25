@@ -46,6 +46,7 @@ public final class MediaPlaybackService extends Service {
     private static final String NOTIFICATION_PERMISSION_ASKED = "media_notification_permission_asked";
     private static final Object LOCK = new Object();
     private static WeakReference<MediaSession> activeSession = new WeakReference<>(null);
+    private static GeckoSession activeOwnerSession;
     private static GeckoSession retainedGeckoSession;
     private static MediaSession retainedMediaSession;
     private static Context applicationContext;
@@ -102,7 +103,8 @@ public final class MediaPlaybackService extends Service {
     }
 
     public static void retainGeckoSession(Context context, GeckoSession geckoSession, MediaSession mediaSession,
-                                          boolean isPlaying, String mediaTitle, String mediaArtist) {
+                                          boolean isPlaying, String mediaTitle, String mediaArtist,
+                                          boolean privatePlayback) {
         if (context == null || geckoSession == null) {
             return;
         }
@@ -116,6 +118,7 @@ public final class MediaPlaybackService extends Service {
             }
             retainedGeckoSession = geckoSession;
             retainedMediaSession = mediaSession;
+            activeOwnerSession = geckoSession;
             activeSession = new WeakReference<>(mediaSession);
             activePlaying = isPlaying;
             notificationActive = true;
@@ -137,7 +140,7 @@ public final class MediaPlaybackService extends Service {
             @Override
             public void onActivated(GeckoSession sourceSession, MediaSession changedSession) {
                 if (sourceSession == geckoSession) {
-                    onSessionActivated(app, changedSession, currentRetainedTitle(), currentRetainedArtist());
+                    onSessionActivated(app, geckoSession, changedSession, currentRetainedTitle(), currentRetainedArtist());
                 }
             }
 
@@ -146,22 +149,22 @@ public final class MediaPlaybackService extends Service {
                 if (sourceSession != geckoSession) {
                     return;
                 }
-                String nextTitle = metadata == null ? "" : metadata.title;
-                String nextArtist = metadata == null ? "" : metadata.artist;
-                MediaPlaybackService.onMetadata(app, changedSession, nextTitle, nextArtist);
+                String nextTitle = privatePlayback ? "プライベート再生" : metadata == null ? "" : metadata.title;
+                String nextArtist = privatePlayback ? "Coara Gecko" : metadata == null ? "" : metadata.artist;
+                MediaPlaybackService.onMetadata(app, geckoSession, changedSession, nextTitle, nextArtist);
             }
 
             @Override
             public void onPlay(GeckoSession sourceSession, MediaSession changedSession) {
                 if (sourceSession == geckoSession) {
-                    onPlaybackState(app, changedSession, true, false, currentRetainedTitle(), currentRetainedArtist());
+                    onPlaybackState(app, geckoSession, changedSession, true, false, currentRetainedTitle(), currentRetainedArtist());
                 }
             }
 
             @Override
             public void onPause(GeckoSession sourceSession, MediaSession changedSession) {
                 if (sourceSession == geckoSession) {
-                    onPlaybackState(app, changedSession, false, false, currentRetainedTitle(), currentRetainedArtist());
+                    onPlaybackState(app, geckoSession, changedSession, false, false, currentRetainedTitle(), currentRetainedArtist());
                 }
             }
 
@@ -169,7 +172,7 @@ public final class MediaPlaybackService extends Service {
             public void onStop(GeckoSession sourceSession, MediaSession changedSession) {
                 if (sourceSession == geckoSession) {
                     MediaPipActivity.closeForSession(geckoSession);
-                    onPlaybackState(app, changedSession, false, true, currentRetainedTitle(), currentRetainedArtist());
+                    onPlaybackState(app, geckoSession, changedSession, false, true, currentRetainedTitle(), currentRetainedArtist());
                     releaseRetainedSession(geckoSession);
                 }
             }
@@ -178,7 +181,7 @@ public final class MediaPlaybackService extends Service {
             public void onDeactivated(GeckoSession sourceSession, MediaSession changedSession) {
                 if (sourceSession == geckoSession) {
                     MediaPipActivity.closeForSession(geckoSession);
-                    onPlaybackState(app, changedSession, false, true, currentRetainedTitle(), currentRetainedArtist());
+                    onPlaybackState(app, geckoSession, changedSession, false, true, currentRetainedTitle(), currentRetainedArtist());
                     releaseRetainedSession(geckoSession);
                 }
             }
@@ -196,6 +199,70 @@ public final class MediaPlaybackService extends Service {
         }
     }
 
+    public static void stopRetainedPlayback(GeckoSession expected) {
+        if (expected == null) {
+            return;
+        }
+        MediaSession mediaSession;
+        synchronized (LOCK) {
+            if (retainedGeckoSession == null || retainedGeckoSession != expected) {
+                return;
+            }
+            mediaSession = retainedMediaSession;
+        }
+        if (mediaSession != null) {
+            try {
+                mediaSession.stop();
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
+    public static void stopPlaybackForSession(GeckoSession expected) {
+        if (expected == null) {
+            return;
+        }
+        MediaSession mediaSession = null;
+        GeckoSession retained = null;
+        Context app = null;
+        long version = 0L;
+        boolean clearNotification = false;
+        synchronized (LOCK) {
+            if (activeOwnerSession != expected && retainedGeckoSession != expected) {
+                return;
+            }
+            mediaSession = activeOwnerSession == expected ? activeSession.get() : retainedMediaSession;
+            if (retainedGeckoSession == expected) {
+                retained = retainedGeckoSession;
+                retainedGeckoSession = null;
+                retainedMediaSession = null;
+            }
+            if (activeOwnerSession == expected) {
+                activeOwnerSession = null;
+                activeSession = new WeakReference<>(null);
+                activePlaying = false;
+                notificationActive = false;
+                activeTitle = "メディア再生";
+                activeArtist = "Coara Gecko";
+                app = applicationContext;
+                version = ++stateVersion;
+                clearNotification = app != null;
+            }
+        }
+        if (mediaSession != null) {
+            try {
+                mediaSession.stop();
+            } catch (RuntimeException ignored) {
+            }
+        }
+        if (retained != null) {
+            closeRetainedSession(retained);
+        }
+        if (clearNotification && app != null) {
+            postEndedState(app, version, "メディア再生", "Coara Gecko");
+        }
+    }
+
     public static void releaseRetainedSession(GeckoSession expected) {
         GeckoSession session;
         long version = 0L;
@@ -209,9 +276,12 @@ public final class MediaPlaybackService extends Service {
             MediaSession mediaSession = retainedMediaSession;
             retainedGeckoSession = null;
             retainedMediaSession = null;
-            boolean activeOwnerMatches = mediaSession != null
-                    ? activeSession.get() == mediaSession : activeSession.get() == null;
+            boolean activeOwnerMatches = activeOwnerSession == session && (mediaSession != null
+                    ? activeSession.get() == mediaSession : activeSession.get() == null);
             if (activeOwnerMatches && !activePlaying) {
+                if (activeOwnerSession == session) {
+                    activeOwnerSession = null;
+                }
                 activeSession = new WeakReference<>(null);
                 notificationActive = false;
                 activeTitle = "メディア再生";
@@ -252,32 +322,49 @@ public final class MediaPlaybackService extends Service {
     }
 
     public static void onSessionActivated(Context context, MediaSession session, String mediaTitle, String mediaArtist) {
+        onSessionActivated(context, null, session, mediaTitle, mediaArtist);
+    }
+
+    public static void onSessionActivated(Context context, GeckoSession owner, MediaSession session,
+                                          String mediaTitle, String mediaArtist) {
         if (context == null || session == null) {
             return;
         }
         Context app = context.getApplicationContext();
         long version;
-        boolean clearPrevious;
+        boolean publish;
+        boolean nextPlaying;
         synchronized (LOCK) {
             applicationContext = app;
             MediaSession current = activeSession.get();
-            clearPrevious = current != null && current != session;
-            if (clearPrevious) {
-                notificationActive = false;
+            if (activePlaying && current != session) {
+                return;
             }
+            nextPlaying = current == session && activePlaying;
             activeSession = new WeakReference<>(session);
-            activePlaying = current == session && activePlaying;
+            if (owner != null) {
+                activeOwnerSession = owner;
+            }
+            activePlaying = nextPlaying;
             activeTitle = normalize(mediaTitle, "メディア再生");
             activeArtist = normalize(mediaArtist, "Coara Gecko");
+            publish = notificationActive;
             version = ++stateVersion;
         }
-        if (!clearPrevious) {
-            return;
+        if (publish) {
+            try {
+                ContextCompat.startForegroundService(app, updateIntent(app, version,
+                        false, nextPlaying, mediaTitle, mediaArtist));
+            } catch (RuntimeException ignored) {
+            }
         }
-        postEndedState(app, version, mediaTitle, mediaArtist);
     }
 
     public static void onSessionDeactivated(Context context, MediaSession session) {
+        onSessionDeactivated(context, null, session);
+    }
+
+    public static void onSessionDeactivated(Context context, GeckoSession owner, MediaSession session) {
         if (context == null || session == null) {
             return;
         }
@@ -288,23 +375,32 @@ public final class MediaPlaybackService extends Service {
         String mediaArtist;
         synchronized (LOCK) {
             applicationContext = app;
-            clear = activeSession.get() == session && !activePlaying;
-            if (!clear) {
+            if (activeSession.get() != session || (owner != null && activeOwnerSession != null
+                    && activeOwnerSession != owner) || activePlaying) {
                 return;
             }
             activeSession = new WeakReference<>(null);
+            activeOwnerSession = null;
             notificationActive = false;
             activeTitle = "メディア再生";
             activeArtist = "Coara Gecko";
             mediaTitle = activeTitle;
             mediaArtist = activeArtist;
             version = ++stateVersion;
+            clear = true;
         }
-        postEndedState(app, version, mediaTitle, mediaArtist);
+        if (clear) {
+            postEndedState(app, version, mediaTitle, mediaArtist);
+        }
     }
 
     public static void onPlaybackState(Context context, MediaSession session, boolean isPlaying,
                                        boolean stopped, String mediaTitle, String mediaArtist) {
+        onPlaybackState(context, null, session, isPlaying, stopped, mediaTitle, mediaArtist);
+    }
+
+    public static void onPlaybackState(Context context, GeckoSession owner, MediaSession session,
+                                       boolean isPlaying, boolean stopped, String mediaTitle, String mediaArtist) {
         if (context == null || session == null) {
             return;
         }
@@ -316,10 +412,12 @@ public final class MediaPlaybackService extends Service {
             applicationContext = appContext;
             MediaSession current = activeSession.get();
             if (stopped) {
-                if (current != session) {
+                if (current != session || (owner != null && activeOwnerSession != null
+                        && activeOwnerSession != owner)) {
                     return;
                 }
                 activeSession = new WeakReference<>(null);
+                activeOwnerSession = null;
                 activePlaying = false;
                 notificationActive = false;
                 activeTitle = "メディア再生";
@@ -332,12 +430,16 @@ public final class MediaPlaybackService extends Service {
                 ended = true;
             } else if (isPlaying) {
                 activeSession = new WeakReference<>(session);
+                if (owner != null) {
+                    activeOwnerSession = owner;
+                }
                 activePlaying = true;
                 notificationActive = true;
                 activeTitle = normalize(mediaTitle, "メディア再生");
                 activeArtist = normalize(mediaArtist, "Coara Gecko");
             } else {
-                if (current != session) {
+                if (current != session || (owner != null && activeOwnerSession != null
+                        && activeOwnerSession != owner)) {
                     return;
                 }
                 activePlaying = false;
@@ -350,19 +452,23 @@ public final class MediaPlaybackService extends Service {
             MediaPipActivity.closeForSession(retainedToClose);
             closeRetainedSession(retainedToClose);
         }
-        Context app = context.getApplicationContext();
         if (ended) {
-            postEndedState(app, version, mediaTitle, mediaArtist);
+            postEndedState(appContext, version, mediaTitle, mediaArtist);
             return;
         }
-        Intent intent = updateIntent(app, version, false, isPlaying, mediaTitle, mediaArtist);
+        Intent intent = updateIntent(appContext, version, false, isPlaying, mediaTitle, mediaArtist);
         try {
-            ContextCompat.startForegroundService(app, intent);
+            ContextCompat.startForegroundService(appContext, intent);
         } catch (RuntimeException ignored) {
         }
     }
 
     public static void onMetadata(Context context, MediaSession session, String mediaTitle, String mediaArtist) {
+        onMetadata(context, null, session, mediaTitle, mediaArtist);
+    }
+
+    public static void onMetadata(Context context, GeckoSession owner, MediaSession session,
+                                  String mediaTitle, String mediaArtist) {
         if (context == null || session == null) {
             return;
         }
@@ -371,7 +477,8 @@ public final class MediaPlaybackService extends Service {
         boolean isPlaying;
         synchronized (LOCK) {
             applicationContext = app;
-            if (activeSession.get() != session) {
+            if (activeSession.get() != session || (owner != null && activeOwnerSession != null
+                    && activeOwnerSession != owner)) {
                 return;
             }
             activeTitle = normalize(mediaTitle, activeTitle);
@@ -558,6 +665,7 @@ public final class MediaPlaybackService extends Service {
         synchronized (LOCK) {
             session = activeSession.get();
             activeSession = new WeakReference<>(null);
+            activeOwnerSession = null;
             activePlaying = false;
             notificationActive = false;
             activeTitle = "メディア再生";
@@ -750,7 +858,7 @@ public final class MediaPlaybackService extends Service {
                 serviceAction(playing ? ACTION_PAUSE : ACTION_PLAY, playing ? 7403 : 7404)).build());
         builder.addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel,
                 "停止", serviceAction(ACTION_STOP, 7405)).build());
-        if (Build.VERSION.SDK_INT < 35 && platformMediaSession != null) {
+        if (platformMediaSession != null) {
             builder.setStyle(new Notification.MediaStyle()
                     .setMediaSession(platformMediaSession.getSessionToken())
                     .setShowActionsInCompactView(0, 1));

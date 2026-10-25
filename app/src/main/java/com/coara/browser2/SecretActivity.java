@@ -559,7 +559,18 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (com.coara.browser2.MediaPipActivity.isReturnToSourceIntent(intent)) {
+            com.coara.browser2.MediaPipActivity.consumeReturnToSource(this);
+            setIntent(new Intent());
+            return;
+        }
         handleIntent(intent);
+    }
+
+    public void returnToPictureInPictureSource(BrowserView target) {
+        if (target == webView) {
+            target.requestFocus();
+        }
     }
 
     @Override
@@ -652,7 +663,7 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         super.onUserLeaveHint();
         boolean enabled = pref != null && pref.getBoolean("picture_in_picture_enabled", false);
         BrowserView current = getCurrentWebView();
-        if (enabled && !isFinishing() && current != null && current.isMediaPlaying()) {
+        if (enabled && !isFinishing() && current != null && !current.isDestroyed()) {
             current.requestPictureInPicture();
         }
     }
@@ -1182,13 +1193,13 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                     return;
                 }
                 if (!com.coara.browser2.MediaPipActivity.launch(SecretActivity.this, view, placementToken)) {
-                    view.setPictureInPictureActive(false);
+                    view.rejectPictureInPictureRequest();
                 }
             }
 
             @Override
             public void onPictureInPictureClosed(BrowserView view) {
-                com.coara.browser2.MediaPipActivity.closeForSource(view);
+                com.coara.browser2.MediaPipActivity.closeForGecko(view);
                 view.setPictureInPictureActive(false);
             }
 
@@ -1196,12 +1207,13 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             public void onMediaSessionActivated(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession,
                                                 String title, String artist) {
                 com.coara.browser2.MediaPlaybackService.onSessionActivated(
-                        SecretActivity.this, mediaSession, "プライベート再生", "Coara Gecko");
+                        SecretActivity.this, view.getGeckoSession(), mediaSession, "プライベート再生", "Coara Gecko");
             }
 
             @Override
             public void onMediaSessionDeactivated(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession) {
-                com.coara.browser2.MediaPlaybackService.onSessionDeactivated(SecretActivity.this, mediaSession);
+                com.coara.browser2.MediaPlaybackService.onSessionDeactivated(
+                        SecretActivity.this, view.getGeckoSession(), mediaSession);
             }
 
             @Override
@@ -1211,14 +1223,15 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                     com.coara.browser2.MediaPlaybackService.requestNotificationPermission(SecretActivity.this);
                 }
                 com.coara.browser2.MediaPlaybackService.onPlaybackState(
-                        SecretActivity.this, mediaSession, playing, stopped, "プライベート再生", "Coara Gecko");
+                        SecretActivity.this, view.getGeckoSession(), mediaSession, playing, stopped,
+                        "プライベート再生", "Coara Gecko");
             }
 
             @Override
             public void onMediaMetadataChanged(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession,
                                                String title, String artist) {
                 com.coara.browser2.MediaPlaybackService.onMetadata(
-                        SecretActivity.this, mediaSession, "プライベート再生", "Coara Gecko");
+                        SecretActivity.this, view.getGeckoSession(), mediaSession, "プライベート再生", "Coara Gecko");
             }
 
             @Override

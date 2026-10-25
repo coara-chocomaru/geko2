@@ -1258,6 +1258,11 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (com.coara.browser2.MediaPipActivity.isReturnToSourceIntent(intent)) {
+            com.coara.browser2.MediaPipActivity.consumeReturnToSource(this);
+            setIntent(new Intent());
+            return;
+        }
         if (isCustomTabMode()) {
             if (!shouldRunCustomTabForIntent(intent)) {
                 if (!forwardUnmarkedCustomTabIntent(intent)) {
@@ -1354,9 +1359,40 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         if (redirectingCustomTabLaunch || !isPictureInPictureEnabled() || isFinishing()) {
             return;
         }
+        ArrayList<BrowserView> candidates = new ArrayList<>();
         BrowserView current = getCurrentWebView();
-        if (current != null && current.isMediaPlaying()) {
-            current.requestPictureInPicture();
+        addPipCandidate(candidates, current, true);
+        for (BrowserView candidate : webViews) {
+            if (candidate != current && candidate != null && candidate.isNotificationMediaSession()) {
+                addPipCandidate(candidates, candidate, false);
+            }
+        }
+        for (BrowserView candidate : webViews) {
+            addPipCandidate(candidates, candidate, false);
+        }
+        requestPictureInPictureFromTabs(candidates, 0);
+    }
+
+    private void addPipCandidate(ArrayList<BrowserView> candidates, BrowserView candidate, boolean allowNoMediaSession) {
+        if (candidate != null && !candidate.isDestroyed() && !candidates.contains(candidate)
+                && (allowNoMediaSession || candidate.isMediaPlaying())) {
+            candidates.add(candidate);
+        }
+    }
+
+    private void requestPictureInPictureFromTabs(ArrayList<BrowserView> candidates, int index) {
+        if (isFinishing() || !isPictureInPictureEnabled() || index >= candidates.size()) {
+            return;
+        }
+        BrowserView candidate = candidates.get(index);
+        if (candidate == null || candidate.isDestroyed()) {
+            requestPictureInPictureFromTabs(candidates, index + 1);
+            return;
+        }
+        boolean started = candidate.requestPictureInPicture(() ->
+                requestPictureInPictureFromTabs(candidates, index + 1));
+        if (!started) {
+            requestPictureInPictureFromTabs(candidates, index + 1);
         }
     }
 
@@ -2490,13 +2526,13 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     return;
                 }
                 if (!com.coara.browser2.MediaPipActivity.launch(MainActivity.this, view, placementToken)) {
-                    view.setPictureInPictureActive(false);
+                    view.rejectPictureInPictureRequest();
                 }
             }
 
             @Override
             public void onPictureInPictureClosed(BrowserView view) {
-                com.coara.browser2.MediaPipActivity.closeForSource(view);
+                com.coara.browser2.MediaPipActivity.closeForGecko(view);
                 view.setPictureInPictureActive(false);
             }
 
@@ -2504,12 +2540,13 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             public void onMediaSessionActivated(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession,
                                                 String title, String artist) {
                 com.coara.browser2.MediaPlaybackService.onSessionActivated(
-                        MainActivity.this, mediaSession, title, artist);
+                        MainActivity.this, view.getGeckoSession(), mediaSession, title, artist);
             }
 
             @Override
             public void onMediaSessionDeactivated(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession) {
-                com.coara.browser2.MediaPlaybackService.onSessionDeactivated(MainActivity.this, mediaSession);
+                com.coara.browser2.MediaPlaybackService.onSessionDeactivated(
+                        MainActivity.this, view.getGeckoSession(), mediaSession);
             }
 
             @Override
@@ -2519,13 +2556,14 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     com.coara.browser2.MediaPlaybackService.requestNotificationPermission(MainActivity.this);
                 }
                 com.coara.browser2.MediaPlaybackService.onPlaybackState(
-                        MainActivity.this, mediaSession, playing, stopped, title, artist);
+                        MainActivity.this, view.getGeckoSession(), mediaSession, playing, stopped, title, artist);
             }
 
             @Override
             public void onMediaMetadataChanged(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession,
                                                String title, String artist) {
-                com.coara.browser2.MediaPlaybackService.onMetadata(MainActivity.this, mediaSession, title, artist);
+                com.coara.browser2.MediaPlaybackService.onMetadata(
+                        MainActivity.this, view.getGeckoSession(), mediaSession, title, artist);
             }
 
             @Override
@@ -3837,6 +3875,19 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         newWebView.loadUrl(url);
     }
 
+
+    public void returnToPictureInPictureSource(BrowserView target) {
+        if (target == null) {
+            return;
+        }
+        int index = webViews.indexOf(target);
+        if (index >= 0 && index != currentTabIndex) {
+            switchToTab(index);
+        }
+        if (target == getCurrentWebView()) {
+            target.requestFocus();
+        }
+    }
 
     private void switchToTab(int index) {
         if (index < 0 || index >= webViews.size() || index == currentTabIndex) return;

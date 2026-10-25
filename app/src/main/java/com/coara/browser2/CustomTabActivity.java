@@ -262,6 +262,10 @@ public final class CustomTabActivity extends MainActivity {
 
     @Override
     protected void onNewIntent(Intent intent) {
+        if (MediaPipActivity.isReturnToSourceIntent(intent)) {
+            super.onNewIntent(intent);
+            return;
+        }
         customTabsIntentRecognized = hasCustomTabsIntentExtras(intent);
         sessionToken = extractSessionToken(intent);
         Intent safe = sanitizeIntent(intent);
