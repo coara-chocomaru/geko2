@@ -688,17 +688,22 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             return;
         }
         BrowserView target = fullScreenActive && fullScreenView != null ? fullScreenView : getCurrentWebView();
-        if (target == null || target.isDestroyed() || !target.isMediaPlaying()
-                || target.isPictureInPictureActiveOrPending()) {
+        if (target == null || target.isDestroyed() || target.isPictureInPictureActiveOrPending()) {
             return;
         }
         if (!PictureInPictureSettings.isSystemPipAllowed(this)) {
-            PictureInPictureSettings.showSystemPipDisabled(this);
+            if (target.isMediaPlaying()) {
+                PictureInPictureSettings.showSystemPipDisabled(this);
+            }
             return;
         }
-        boolean requested = target.requestPictureInPicture(() -> runOnUiThread(
-                () -> PictureInPictureSettings.showStartFailed(SecretActivity.this)));
-        if (!requested) {
+        boolean knownMediaSession = target.isMediaPlaying();
+        boolean requested = target.requestPictureInPicture(() -> runOnUiThread(() -> {
+            if (knownMediaSession) {
+                PictureInPictureSettings.showStartFailed(SecretActivity.this);
+            }
+        }));
+        if (!requested && knownMediaSession) {
             PictureInPictureSettings.showStartFailed(this);
         }
     }

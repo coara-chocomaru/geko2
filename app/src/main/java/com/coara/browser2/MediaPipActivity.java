@@ -87,15 +87,19 @@ public final class MediaPipActivity extends AppCompatActivity {
         }
         GeckoSession clonedSession = null;
         try {
-            GeckoSessionSettings settings = new GeckoSessionSettings.Builder()
+            originalSession.getSessionPictureInPicture().setKeepActive(true);
+            originalSession.getSettings().setSuspendMediaWhenInactive(false);
+            originalSession.setActive(true);
+            originalSession.setPriorityHint(GeckoSession.PRIORITY_HIGH);
+            GeckoSessionSettings settings = new GeckoSessionSettings.Builder(originalSession.getSettings())
                     .pictureInPictureToken(placementToken)
                     .suspendMediaWhenInactive(false)
                     .build();
             clonedSession = new GeckoSession(settings);
             clonedSession.open(BrowserEngine.get().getRuntime());
-            originalSession.getSessionPictureInPicture().setKeepActive(true);
-            originalSession.setActive(true);
-            originalSession.setPriorityHint(GeckoSession.PRIORITY_HIGH);
+            clonedSession.getSettings().setSuspendMediaWhenInactive(false);
+            clonedSession.setActive(true);
+            clonedSession.setPriorityHint(GeckoSession.PRIORITY_HIGH);
         } catch (Throwable error) {
             if (clonedSession != null) {
                 try {
