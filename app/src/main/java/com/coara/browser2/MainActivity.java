@@ -25,6 +25,7 @@ import android.os.Bundle;
 import android.os.SystemClock;
 import android.os.Environment;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.Message;
 import android.os.Parcel;
 import android.text.InputType;
@@ -83,6 +84,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.textfield.TextInputEditText;
 import com.coara.browser2.util.BrowserUrlRouter;
 import com.coara.browser2.util.PictureInPictureSettings;
+import com.coara.browser2.util.PictureInPictureAspectRatio;
 import com.coara.browser2.util.BrowserAssetLoader;
 import com.coara.browser2.model.Bookmark;
 import com.google.android.material.snackbar.Snackbar;
@@ -252,6 +254,21 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     private BrowserView fullScreenView = null;
     private BrowserView hostPipTarget;
     private boolean hostPipChromeHidden;
+    private Rational hostPipAspectRatio = PictureInPictureAspectRatio.defaultAspectRatio();
+    private final Handler hostPipAspectHandler = new Handler(Looper.getMainLooper());
+    private final Runnable hostPipAspectRefresh = new Runnable() {
+        @Override
+        public void run() {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || !isInPictureInPictureMode() || isFinishing()) {
+                return;
+            }
+            BrowserView target = getHostPipAspectTarget();
+            if (target != null && !target.isDestroyed()) {
+                refreshHostPipAspectRatio(target, true);
+                hostPipAspectHandler.postDelayed(this, 1800L);
+            }
+        }
+    };
     private int hostPipPreviousProgressVisibility = View.INVISIBLE;
     private int fullScreenPreviousOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
     private final Map<BrowserView, Bitmap> tabSnapshots = new LinkedHashMap<>();
@@ -1362,18 +1379,36 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     protected void onUserLeaveHint() {
         super.onUserLeaveHint();
         if (redirectingCustomTabLaunch || !isPictureInPictureEnabled() || isFinishing()
-                || !PictureInPictureSettings.isSystemPipAllowed(this)
                 || com.coara.browser2.MediaPipActivity.hasActiveOrPendingWindow()) {
             return;
         }
-        if (!isNativeVideoPipEligible()) {
+        BrowserView target = fullScreenActive && fullScreenView != null ? fullScreenView : getCurrentWebView();
+        if (target == null || target.isDestroyed() || !target.isMediaPlaying()
+                || target.isPictureInPictureActiveOrPending()) {
             return;
         }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            try {
-                enterPictureInPictureMode(buildHostPipParams(false));
-            } catch (RuntimeException ignored) {
+        if (!PictureInPictureSettings.isSystemPipAllowed(this)) {
+            PictureInPictureSettings.showSystemPipDisabled(this);
+            return;
+        }
+        if (isNativeVideoPipEligible()) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                try {
+                    if (!enterPictureInPictureMode(buildHostPipParams(false))) {
+                        target.requestPictureInPicture(() -> runOnUiThread(
+                                () -> PictureInPictureSettings.showStartFailed(MainActivity.this)));
+                    }
+                } catch (RuntimeException error) {
+                    target.requestPictureInPicture(() -> runOnUiThread(
+                            () -> PictureInPictureSettings.showStartFailed(MainActivity.this)));
+                }
             }
+            return;
+        }
+        boolean requested = target.requestPictureInPicture(() -> runOnUiThread(
+                () -> PictureInPictureSettings.showStartFailed(MainActivity.this)));
+        if (!requested) {
+            PictureInPictureSettings.showStartFailed(this);
         }
     }
 
@@ -1405,7 +1440,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
     private android.app.PictureInPictureParams buildHostPipParams(boolean autoEnter) {
         android.app.PictureInPictureParams.Builder builder = new android.app.PictureInPictureParams.Builder()
-                .setAspectRatio(new Rational(16, 9));
+                .setAspectRatio(hostPipAspectRatio);
         BrowserView target = hostPipTarget;
         if (target == null && fullScreenActive) {
             target = fullScreenView;
@@ -1426,10 +1461,47 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || isCustomTabMode()) {
             return;
         }
+        boolean autoEnter = isNativeVideoPipEligible();
+        BrowserView aspectTarget = getHostPipAspectTarget();
+        if (aspectTarget != null && !aspectTarget.isDestroyed()) {
+            hostPipAspectRatio = PictureInPictureAspectRatio.getCached(aspectTarget);
+            refreshHostPipAspectRatio(aspectTarget, true);
+        } else if (!isInPictureInPictureMode()) {
+            hostPipAspectRatio = PictureInPictureAspectRatio.defaultAspectRatio();
+        }
         try {
-            setPictureInPictureParams(buildHostPipParams(isNativeVideoPipEligible()));
+            setPictureInPictureParams(buildHostPipParams(autoEnter));
         } catch (RuntimeException ignored) {
         }
+    }
+
+    private BrowserView getHostPipAspectTarget() {
+        BrowserView target = hostPipTarget;
+        if (target == null && fullScreenActive) {
+            target = fullScreenView;
+        }
+        return target;
+    }
+
+    private void refreshHostPipAspectRatio(BrowserView target, boolean force) {
+        if (target == null || target.isDestroyed()) {
+            return;
+        }
+        PictureInPictureAspectRatio.query(target, force, ratio -> {
+            if (isFinishing() || target.isDestroyed() || getHostPipAspectTarget() != target) {
+                return;
+            }
+            if (!ratio.equals(hostPipAspectRatio)) {
+                hostPipAspectRatio = ratio;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    try {
+                        boolean autoEnter = !isInPictureInPictureMode() && isNativeVideoPipEligible();
+                        setPictureInPictureParams(buildHostPipParams(autoEnter));
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+            }
+        });
     }
 
     private void setHostPipChromeHidden(boolean hidden) {
@@ -1472,6 +1544,12 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 target.getGeckoSession().getCompositorController().onPipModeChanged(isInPictureInPictureMode);
             } catch (Throwable ignored) {
             }
+        }
+        if (isInPictureInPictureMode) {
+            hostPipAspectHandler.removeCallbacks(hostPipAspectRefresh);
+            hostPipAspectHandler.postDelayed(hostPipAspectRefresh, 1200L);
+        } else {
+            hostPipAspectHandler.removeCallbacks(hostPipAspectRefresh);
         }
         setHostPipChromeHidden(isInPictureInPictureMode);
         updateHostPipParams();
@@ -1524,6 +1602,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
 
     @Override
     protected void onDestroy() {
+        hostPipAspectHandler.removeCallbacks(hostPipAspectRefresh);
         UiThread.mainHandler().removeCallbacks(hidePageProgressRunnable);
         if (redirectingCustomTabLaunch) {
             super.onDestroy();
@@ -2611,6 +2690,11 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                     return;
                 }
                 if (!com.coara.browser2.MediaPipActivity.launch(MainActivity.this, view, placementToken)) {
+                    if (!PictureInPictureSettings.isSystemPipAllowed(MainActivity.this)) {
+                        PictureInPictureSettings.showSystemPipDisabled(MainActivity.this);
+                    } else {
+                        PictureInPictureSettings.showStartFailed(MainActivity.this);
+                    }
                     view.rejectPictureInPictureRequest();
                 }
             }

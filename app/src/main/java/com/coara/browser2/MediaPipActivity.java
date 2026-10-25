@@ -8,6 +8,8 @@ import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Rational;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
@@ -19,6 +21,7 @@ import androidx.lifecycle.Lifecycle;
 import com.coara.browser2.gecko.BrowserEngine;
 import com.coara.browser2.gecko.BrowserView;
 import com.coara.browser2.util.PictureInPictureSettings;
+import com.coara.browser2.util.PictureInPictureAspectRatio;
 
 import org.mozilla.geckoview.GeckoSession;
 import org.mozilla.geckoview.GeckoSessionSettings;
@@ -56,6 +59,21 @@ public final class MediaPipActivity extends AppCompatActivity {
     private boolean enteredPip;
     private boolean closing;
     private boolean returnToSourceOnResume;
+    private Rational pipAspectRatio = PictureInPictureAspectRatio.defaultAspectRatio();
+    private final Handler pipAspectHandler = new Handler(Looper.getMainLooper());
+    private final Runnable pipAspectRefresh = new Runnable() {
+        @Override
+        public void run() {
+            if (closing || !isInPictureInPictureMode() || pipSession == null) {
+                return;
+            }
+            BrowserView source = sourceView.get();
+            if (source != null && !source.isDestroyed()) {
+                refreshPipAspectRatio(source, true);
+                pipAspectHandler.postDelayed(this, 1800L);
+            }
+        }
+    };
 
     public static boolean launch(Context context, BrowserView source, String placementToken) {
         if (context == null || source == null || placementToken == null || placementToken.isEmpty()
@@ -339,6 +357,7 @@ public final class MediaPipActivity extends AppCompatActivity {
         sourceHost = request.sourceHost;
         sourceSession = request.sourceSession;
         pipSession = request.pipSession;
+        pipAspectRatio = PictureInPictureAspectRatio.getCached(nextSourceView);
         try {
             sourceSession.getSessionPictureInPicture().setKeepActive(true);
             sourceSession.setActive(true);
@@ -348,13 +367,24 @@ public final class MediaPipActivity extends AppCompatActivity {
             pipView.setSession(pipSession);
             pipSession.setActive(true);
             pipSession.setPriorityHint(GeckoSession.PRIORITY_HIGH);
+            pipView.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+                if (pipSession == null || closing || right <= left || bottom <= top) {
+                    return;
+                }
+                try {
+                    pipSession.getCompositorController().onPipModeChanged(isInPictureInPictureMode());
+                } catch (RuntimeException ignored) {
+                }
+            });
             pipSession.getCompositorController().onPipModeChanged(isInPictureInPictureMode());
             setPictureInPictureParams(buildPipParams());
+            refreshPipAspectRatio(nextSourceView, true);
             if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)) {
                 enterPipIfNeeded();
             }
             return true;
         } catch (Throwable error) {
+            PictureInPictureSettings.showStartFailed(this);
             finishWindow(true, false);
             return false;
         }
@@ -406,18 +436,31 @@ public final class MediaPipActivity extends AppCompatActivity {
 
     private PictureInPictureParams buildPipParams() {
         PictureInPictureParams.Builder builder = new PictureInPictureParams.Builder()
-                .setAspectRatio(new Rational(16, 9));
+                .setAspectRatio(pipAspectRatio);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             builder.setAutoEnterEnabled(true);
         }
         return builder.build();
     }
 
+    private void refreshPipAspectRatio(BrowserView source, boolean force) {
+        PictureInPictureAspectRatio.query(source, force, ratio -> {
+            if (closing || pipSession == null || sourceView.get() != source || source.isDestroyed()) {
+                return;
+            }
+            if (!ratio.equals(pipAspectRatio)) {
+                pipAspectRatio = ratio;
+                try {
+                    setPictureInPictureParams(buildPipParams());
+                } catch (RuntimeException ignored) {
+                }
+            }
+        });
+    }
+
     private void showPipStartFailure() {
         if (!isFinishing()) {
-            android.widget.Toast.makeText(this,
-                    "小窓再生を開始できません。AndroidのPiP許可設定と端末の対応状況を確認してください",
-                    android.widget.Toast.LENGTH_LONG).show();
+            PictureInPictureSettings.showStartFailed(this);
         }
     }
 
@@ -433,8 +476,11 @@ public final class MediaPipActivity extends AppCompatActivity {
         }
         if (isInPictureInPictureMode) {
             enteredPip = true;
+            pipAspectHandler.removeCallbacks(pipAspectRefresh);
+            pipAspectHandler.postDelayed(pipAspectRefresh, 1200L);
             return;
         }
+        pipAspectHandler.removeCallbacks(pipAspectRefresh);
         if (!enteredPip || closing) {
             return;
         }
@@ -535,6 +581,7 @@ public final class MediaPipActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        pipAspectHandler.removeCallbacks(pipAspectRefresh);
         if (!closing && pipSession != null) {
             finishWindow(true, false);
         }

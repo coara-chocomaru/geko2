@@ -23,6 +23,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.util.Base64;
 import android.util.LruCache;
@@ -87,6 +88,7 @@ import com.coara.browser2.util.PageTranslator;
 import com.coara.browser2.util.TranslateSettingsDialog;
 import com.coara.browser2.util.BrowserUrlRouter;
 import com.coara.browser2.util.PictureInPictureSettings;
+import com.coara.browser2.util.PictureInPictureAspectRatio;
 import com.coara.browser2.util.BrowserAssetLoader;
 import com.coara.browser2.util.UiThread;
 import com.coara.browser2.util.HistoryDialog;
@@ -192,6 +194,21 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     private BrowserView fullScreenView = null;
     private BrowserView hostPipTarget;
     private boolean hostPipChromeHidden;
+    private Rational hostPipAspectRatio = PictureInPictureAspectRatio.defaultAspectRatio();
+    private final Handler hostPipAspectHandler = new Handler(Looper.getMainLooper());
+    private final Runnable hostPipAspectRefresh = new Runnable() {
+        @Override
+        public void run() {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || !isInPictureInPictureMode() || isFinishing()) {
+                return;
+            }
+            BrowserView target = getHostPipAspectTarget();
+            if (target != null && !target.isDestroyed()) {
+                refreshHostPipAspectRatio(target, true);
+                hostPipAspectHandler.postDelayed(this, 1800L);
+            }
+        }
+    };
     private int hostPipPreviousProgressVisibility = View.INVISIBLE;
     private int fullScreenPreviousOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
     private boolean pluginReloadPending = false;
@@ -667,18 +684,36 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     protected void onUserLeaveHint() {
         super.onUserLeaveHint();
         boolean enabled = pref != null && pref.getBoolean("picture_in_picture_enabled", false);
-        if (!enabled || isFinishing() || !PictureInPictureSettings.isSystemPipAllowed(this)
-                || com.coara.browser2.MediaPipActivity.hasActiveOrPendingWindow()) {
+        if (!enabled || isFinishing() || com.coara.browser2.MediaPipActivity.hasActiveOrPendingWindow()) {
             return;
         }
-        if (!isNativeVideoPipEligible()) {
+        BrowserView target = fullScreenActive && fullScreenView != null ? fullScreenView : getCurrentWebView();
+        if (target == null || target.isDestroyed() || !target.isMediaPlaying()
+                || target.isPictureInPictureActiveOrPending()) {
             return;
         }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            try {
-                enterPictureInPictureMode(buildHostPipParams(false));
-            } catch (RuntimeException ignored) {
+        if (!PictureInPictureSettings.isSystemPipAllowed(this)) {
+            PictureInPictureSettings.showSystemPipDisabled(this);
+            return;
+        }
+        if (isNativeVideoPipEligible()) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                try {
+                    if (!enterPictureInPictureMode(buildHostPipParams(false))) {
+                        target.requestPictureInPicture(() -> runOnUiThread(
+                                () -> PictureInPictureSettings.showStartFailed(SecretActivity.this)));
+                    }
+                } catch (RuntimeException error) {
+                    target.requestPictureInPicture(() -> runOnUiThread(
+                            () -> PictureInPictureSettings.showStartFailed(SecretActivity.this)));
+                }
             }
+            return;
+        }
+        boolean requested = target.requestPictureInPicture(() -> runOnUiThread(
+                () -> PictureInPictureSettings.showStartFailed(SecretActivity.this)));
+        if (!requested) {
+            PictureInPictureSettings.showStartFailed(this);
         }
     }
 
@@ -709,7 +744,7 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
 
     private android.app.PictureInPictureParams buildHostPipParams(boolean autoEnter) {
         android.app.PictureInPictureParams.Builder builder = new android.app.PictureInPictureParams.Builder()
-                .setAspectRatio(new Rational(16, 9));
+                .setAspectRatio(hostPipAspectRatio);
         BrowserView target = hostPipTarget;
         if (target == null && fullScreenActive) {
             target = fullScreenView;
@@ -730,10 +765,47 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             return;
         }
+        boolean autoEnter = isNativeVideoPipEligible();
+        BrowserView aspectTarget = getHostPipAspectTarget();
+        if (aspectTarget != null && !aspectTarget.isDestroyed()) {
+            hostPipAspectRatio = PictureInPictureAspectRatio.getCached(aspectTarget);
+            refreshHostPipAspectRatio(aspectTarget, true);
+        } else if (!isInPictureInPictureMode()) {
+            hostPipAspectRatio = PictureInPictureAspectRatio.defaultAspectRatio();
+        }
         try {
-            setPictureInPictureParams(buildHostPipParams(isNativeVideoPipEligible()));
+            setPictureInPictureParams(buildHostPipParams(autoEnter));
         } catch (RuntimeException ignored) {
         }
+    }
+
+    private BrowserView getHostPipAspectTarget() {
+        BrowserView target = hostPipTarget;
+        if (target == null && fullScreenActive) {
+            target = fullScreenView;
+        }
+        return target;
+    }
+
+    private void refreshHostPipAspectRatio(BrowserView target, boolean force) {
+        if (target == null || target.isDestroyed()) {
+            return;
+        }
+        PictureInPictureAspectRatio.query(target, force, ratio -> {
+            if (isFinishing() || target.isDestroyed() || getHostPipAspectTarget() != target) {
+                return;
+            }
+            if (!ratio.equals(hostPipAspectRatio)) {
+                hostPipAspectRatio = ratio;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    try {
+                        boolean autoEnter = !isInPictureInPictureMode() && isNativeVideoPipEligible();
+                        setPictureInPictureParams(buildHostPipParams(autoEnter));
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+            }
+        });
     }
 
     private void setHostPipChromeHidden(boolean hidden) {
@@ -777,6 +849,12 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             } catch (Throwable ignored) {
             }
         }
+        if (isInPictureInPictureMode) {
+            hostPipAspectHandler.removeCallbacks(hostPipAspectRefresh);
+            hostPipAspectHandler.postDelayed(hostPipAspectRefresh, 1200L);
+        } else {
+            hostPipAspectHandler.removeCallbacks(hostPipAspectRefresh);
+        }
         setHostPipChromeHidden(isInPictureInPictureMode);
         updateHostPipParams();
     }
@@ -804,6 +882,7 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
 
     @Override
     protected void onDestroy() {
+        hostPipAspectHandler.removeCallbacks(hostPipAspectRefresh);
         UiThread.mainHandler().removeCallbacks(hidePageProgressRunnable);
         PageTranslator.releaseForView(getCurrentWebView());
         if (findController != null) {
@@ -1310,6 +1389,11 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                     return;
                 }
                 if (!com.coara.browser2.MediaPipActivity.launch(SecretActivity.this, view, placementToken)) {
+                    if (!PictureInPictureSettings.isSystemPipAllowed(SecretActivity.this)) {
+                        PictureInPictureSettings.showSystemPipDisabled(SecretActivity.this);
+                    } else {
+                        PictureInPictureSettings.showStartFailed(SecretActivity.this);
+                    }
                     view.rejectPictureInPictureRequest();
                 }
             }
