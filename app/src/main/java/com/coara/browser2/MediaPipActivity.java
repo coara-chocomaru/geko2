@@ -87,7 +87,7 @@ public final class MediaPipActivity extends AppCompatActivity {
         }
         GeckoSession clonedSession = null;
         try {
-            GeckoSessionSettings settings = new GeckoSessionSettings.Builder(originalSession.getSettings())
+            GeckoSessionSettings settings = new GeckoSessionSettings.Builder()
                     .pictureInPictureToken(placementToken)
                     .suspendMediaWhenInactive(false)
                     .build();

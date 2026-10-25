@@ -1391,20 +1391,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             PictureInPictureSettings.showSystemPipDisabled(this);
             return;
         }
-        if (isNativeVideoPipEligible()) {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-                try {
-                    if (!enterPictureInPictureMode(buildHostPipParams(false))) {
-                        target.requestPictureInPicture(() -> runOnUiThread(
-                                () -> PictureInPictureSettings.showStartFailed(MainActivity.this)));
-                    }
-                } catch (RuntimeException error) {
-                    target.requestPictureInPicture(() -> runOnUiThread(
-                            () -> PictureInPictureSettings.showStartFailed(MainActivity.this)));
-                }
-            }
-            return;
-        }
         boolean requested = target.requestPictureInPicture(() -> runOnUiThread(
                 () -> PictureInPictureSettings.showStartFailed(MainActivity.this)));
         if (!requested) {
@@ -1413,29 +1399,12 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     }
 
     private boolean isNativeVideoPipEligible() {
-        boolean enabled = isPictureInPictureEnabled();
-        BrowserView target = fullScreenActive ? fullScreenView : null;
-        boolean eligible = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                && !isCustomTabMode()
-                && !isFinishing()
-                && enabled
-                && PictureInPictureSettings.isSystemPipAllowed(this)
-                && !com.coara.browser2.MediaPipActivity.hasActiveOrPendingWindow()
-                && target != null
-                && !target.isDestroyed()
-                && target.isMediaPlaying();
-        hostPipTarget = eligible ? target : null;
-        return eligible;
+        hostPipTarget = null;
+        return false;
     }
 
     public void disableHostPipForGeckoRequest() {
         hostPipTarget = null;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !isFinishing()) {
-            try {
-                setPictureInPictureParams(buildHostPipParams(false));
-            } catch (RuntimeException ignored) {
-            }
-        }
     }
 
     private android.app.PictureInPictureParams buildHostPipParams(boolean autoEnter) {
@@ -1452,27 +1421,13 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            builder.setAutoEnterEnabled(autoEnter);
+            builder.setAutoEnterEnabled(false);
         }
         return builder.build();
     }
 
     private void updateHostPipParams() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || isCustomTabMode()) {
-            return;
-        }
-        boolean autoEnter = isNativeVideoPipEligible();
-        BrowserView aspectTarget = getHostPipAspectTarget();
-        if (aspectTarget != null && !aspectTarget.isDestroyed()) {
-            hostPipAspectRatio = PictureInPictureAspectRatio.getCached(aspectTarget);
-            refreshHostPipAspectRatio(aspectTarget, true);
-        } else if (!isInPictureInPictureMode()) {
-            hostPipAspectRatio = PictureInPictureAspectRatio.defaultAspectRatio();
-        }
-        try {
-            setPictureInPictureParams(buildHostPipParams(autoEnter));
-        } catch (RuntimeException ignored) {
-        }
+        hostPipTarget = null;
     }
 
     private BrowserView getHostPipAspectTarget() {
