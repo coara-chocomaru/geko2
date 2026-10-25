@@ -2422,9 +2422,11 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                         } catch (Exception ignored) {
                         }
                     });
-                    Toast.makeText(MainActivity.this,
-                            crashed ? "ページの表示中に問題が発生したため復旧しました" : "タブを再読み込みしました",
-                            Toast.LENGTH_SHORT).show();
+                    if (crashed) {
+                        Toast.makeText(MainActivity.this,
+                                "ページの表示中に問題が発生したため復旧しました",
+                                Toast.LENGTH_SHORT).show();
+                    }
                 } catch (Exception e) {
                     e.printStackTrace();
                 }

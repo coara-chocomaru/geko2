@@ -1183,9 +1183,11 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                     } catch (Exception ignored) {
                     }
                 });
-                Toast.makeText(SecretActivity.this,
-                        crashed ? "ページの表示中に問題が発生したため復旧しました" : "タブを再読み込みしました",
-                        Toast.LENGTH_SHORT).show();
+                if (crashed) {
+                    Toast.makeText(SecretActivity.this,
+                            "ページの表示中に問題が発生したため復旧しました",
+                            Toast.LENGTH_SHORT).show();
+                }
             }
 
             @Override
