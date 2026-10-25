@@ -143,7 +143,7 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:resizeableActivity="true"
-            android:supportsPictureInPicture="false"
+            android:supportsPictureInPicture="true"
             android:importantForAutofill="yes"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -177,7 +177,7 @@
             android:exported="false"
             android:launchMode="singleTask"
             android:resizeableActivity="true"
-            android:supportsPictureInPicture="false" />
+            android:supportsPictureInPicture="true" />
 
         <activity
             android:name=".grepmd5appActivity"
@@ -201,22 +201,13 @@
             android:foregroundServiceType="mediaPlayback" />
 
         <activity
-            android:name=".MediaPipActivity"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
-            android:excludeFromRecents="true"
-            android:exported="false"
-            android:launchMode="singleTop"
-            android:resizeableActivity="true"
-            android:supportsPictureInPicture="true"
-            android:theme="@style/Theme.MaterialComponents.Light.NoActionBar" />
-
-        <activity
             android:name=".CustomTabActivity"
             android:label="Coara Gecko 一時タブ"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
             android:exported="false"
             android:launchMode="singleTop"
             android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
             android:taskAffinity=""
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.MaterialComponents.Light.NoActionBar" />
