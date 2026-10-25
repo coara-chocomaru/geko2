@@ -17,3 +17,5 @@
     public static int d(...);
     public static int i(...);
 }
+
+-keep,allowoptimization class com.coara.browser2.PictureInPictureActivity
