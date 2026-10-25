@@ -30,6 +30,7 @@ import android.os.Parcel;
 import android.text.InputType;
 import android.util.Base64;
 import android.util.LruCache;
+import android.util.Rational;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
@@ -1334,6 +1335,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             loadBackgroundImage();
         }
         TouchpadOverlayController.onHostResume(this, pref);
+        updateHostPipParams();
     }
 
     @Override
@@ -1356,21 +1358,96 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
     @Override
     protected void onUserLeaveHint() {
         super.onUserLeaveHint();
-        if (redirectingCustomTabLaunch || !isPictureInPictureEnabled() || isFinishing()) {
+        if (redirectingCustomTabLaunch || !isPictureInPictureEnabled() || isFinishing()
+                || !PictureInPictureSettings.isSystemPipAllowed(this)) {
             return;
+        }
+        if (isNativeVideoPipEligible()) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                try {
+                    if (enterPictureInPictureMode(buildHostPipParams(true))) {
+                        return;
+                    }
+                } catch (RuntimeException ignored) {
+                }
+            } else {
+                return;
+            }
         }
         ArrayList<BrowserView> candidates = new ArrayList<>();
         BrowserView current = getCurrentWebView();
-        addPipCandidate(candidates, current, true);
+        BrowserView fullscreen = fullScreenActive ? fullScreenView : null;
+        addPipCandidate(candidates, fullscreen != null ? fullscreen : (fullScreenActive ? current : null), true);
+        if (current != null && current.isMediaPlaying()) {
+            addPipCandidate(candidates, current, false);
+        }
         for (BrowserView candidate : webViews) {
-            if (candidate != current && candidate != null && candidate.isNotificationMediaSession()) {
+            if (candidate != current && candidate != fullscreen && candidate != null
+                    && candidate.isNotificationMediaSession()) {
                 addPipCandidate(candidates, candidate, false);
             }
         }
         for (BrowserView candidate : webViews) {
-            addPipCandidate(candidates, candidate, false);
+            if (candidate != fullscreen) {
+                addPipCandidate(candidates, candidate, false);
+            }
         }
+        addPipCandidate(candidates, current, true);
         requestPictureInPictureFromTabs(candidates, 0);
+    }
+
+    private boolean isNativeVideoPipEligible() {
+        BrowserView target = fullScreenView;
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && !isCustomTabMode()
+                && !isFinishing()
+                && fullScreenActive
+                && isPictureInPictureEnabled()
+                && PictureInPictureSettings.isSystemPipAllowed(this)
+                && target != null
+                && !target.isDestroyed()
+                && target.isMediaPlaying();
+    }
+
+    private android.app.PictureInPictureParams buildHostPipParams(boolean autoEnter) {
+        android.app.PictureInPictureParams.Builder builder = new android.app.PictureInPictureParams.Builder()
+                .setAspectRatio(new Rational(16, 9));
+        BrowserView target = fullScreenView;
+        if (target != null && !target.isDestroyed()) {
+            android.graphics.Rect sourceRect = new android.graphics.Rect();
+            if (target.getGlobalVisibleRect(sourceRect) && sourceRect.width() > 0 && sourceRect.height() > 0) {
+                builder.setSourceRectHint(sourceRect);
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setAutoEnterEnabled(autoEnter);
+        }
+        return builder.build();
+    }
+
+    private void updateHostPipParams() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || isCustomTabMode()) {
+            return;
+        }
+        try {
+            setPictureInPictureParams(buildHostPipParams(isNativeVideoPipEligible()));
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode,
+                                              android.content.res.Configuration newConfig) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+        BrowserView target = fullScreenView;
+        if (target != null && !target.isDestroyed()) {
+            target.setPictureInPictureActive(isInPictureInPictureMode);
+            try {
+                target.getGeckoSession().getCompositorController().onPipModeChanged(isInPictureInPictureMode);
+            } catch (Throwable ignored) {
+            }
+        }
+        updateHostPipParams();
     }
 
     private void addPipCandidate(ArrayList<BrowserView> candidates, BrowserView candidate, boolean allowNoMediaSession) {
@@ -1409,8 +1486,12 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         TouchpadOverlayController.onHostPause(this);
         PluginRuntime.onHostPause(this);
         com.coara.browser2.fx.FxExtensionManager.get().clearForeground(this);
-        pauseCurrentWebView();
-        pauseAllWebViewTimers();
+        boolean preservePipPlayback = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && isInPictureInPictureMode();
+        if (!preservePipPlayback) {
+            pauseCurrentWebView();
+            pauseAllWebViewTimers();
+        }
         flushHistory();
         saveTabsState();
         super.onPause();
@@ -2557,6 +2638,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 }
                 com.coara.browser2.MediaPlaybackService.onPlaybackState(
                         MainActivity.this, view.getGeckoSession(), mediaSession, playing, stopped, title, artist);
+                updateHostPipParams();
             }
 
             @Override
@@ -2859,6 +2941,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                 | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                 | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+        updateHostPipParams();
     }
 
     private void leaveFullScreen() {
@@ -2872,6 +2955,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         }
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
         setRequestedOrientation(fullScreenPreviousOrientation);
+        updateHostPipParams();
     }
 
     private void recoverFromRenderProcessGone(BrowserView crashed, String recoverUrl) {
@@ -4389,8 +4473,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         boolean enabled = !isPictureInPictureEnabled();
         pref.edit().putBoolean(KEY_PICTURE_IN_PICTURE_ENABLED, enabled).apply();
         if (!enabled) {
-            com.coara.browser2.MediaPipActivity.closeActive();
+            com.coara.browser2.MediaPipActivity.closeActivePreservingPlayback();
         }
+        updateHostPipParams();
         invalidateOptionsMenu();
         Toast.makeText(this, enabled ? "小窓再生を有効にしました" : "小窓再生を無効にしました", Toast.LENGTH_SHORT).show();
     }

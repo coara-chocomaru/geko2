@@ -18,6 +18,7 @@ import androidx.lifecycle.Lifecycle;
 
 import com.coara.browser2.gecko.BrowserEngine;
 import com.coara.browser2.gecko.BrowserView;
+import com.coara.browser2.util.PictureInPictureSettings;
 
 import org.mozilla.geckoview.GeckoSession;
 import org.mozilla.geckoview.GeckoSessionSettings;
@@ -27,7 +28,6 @@ import java.lang.ref.WeakReference;
 
 public final class MediaPipActivity extends AppCompatActivity {
     public static final String ACTION_RETURN_TO_SOURCE = "com.coara.browser2.action.RETURN_TO_PIP_SOURCE";
-    private static final String ABOUT_BLANK = "about:blank";
     private static final Object LOCK = new Object();
     private static WeakReference<MediaPipActivity> activeActivity = new WeakReference<>(null);
     private static PendingPip pendingPip;
@@ -59,8 +59,7 @@ public final class MediaPipActivity extends AppCompatActivity {
 
     public static boolean launch(Context context, BrowserView source, String placementToken) {
         if (context == null || source == null || placementToken == null || placementToken.isEmpty()
-                || Build.VERSION.SDK_INT < Build.VERSION_CODES.O
-                || !context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+                || !PictureInPictureSettings.isSystemPipAllowed(context)
                 || !BrowserEngine.isInitialized()) {
             return false;
         }
@@ -91,12 +90,13 @@ public final class MediaPipActivity extends AppCompatActivity {
         Activity host = context instanceof Activity ? (Activity) context : null;
         PendingPip request = new PendingPip(clonedSession, originalSession, source, host);
         MediaPipActivity active = activeActivity.get();
-        if (active != null && !active.isFinishing() && active.pipView != null) {
+        if (active != null && !active.closing && !active.isFinishing() && active.pipView != null) {
             try {
                 return active.adoptSession(request);
             } catch (Throwable error) {
-                active.finishWindow(true, true);
+                active.finishWindow(true, false);
                 closeClonedSession(clonedSession);
+                source.setPictureInPictureActive(false);
                 return false;
             }
         }
@@ -138,15 +138,31 @@ public final class MediaPipActivity extends AppCompatActivity {
     }
 
     public static void closeActive() {
+        closeActive(true);
+    }
+
+    public static void closeActivePreservingPlayback() {
+        closeActive(false);
+    }
+
+    private static void closeActive(boolean stopPlayback) {
         MediaPipActivity activity = activeActivity.get();
         if (activity != null) {
-            activity.runOnUiThread(() -> activity.finishWindow(true, true));
+            activity.runOnUiThread(() -> activity.finishWindow(true, stopPlayback));
         }
         synchronized (LOCK) {
             PendingPip pending = pendingPip;
             pendingPip = null;
             if (pending != null) {
                 closeClonedSession(pending.pipSession);
+                try {
+                    pending.sourceSession.getSessionPictureInPicture().exit();
+                } catch (Throwable ignored) {
+                }
+                BrowserView source = pending.sourceView.get();
+                if (source != null) {
+                    source.setPictureInPictureActive(false);
+                }
             }
         }
     }
@@ -312,14 +328,16 @@ public final class MediaPipActivity extends AppCompatActivity {
             nextSourceView.setPictureInPictureActive(true);
             pipSession.getSettings().setSuspendMediaWhenInactive(false);
             pipView.setSession(pipSession);
-            pipSession.loadUri(ABOUT_BLANK);
+            pipSession.setActive(true);
+            pipSession.setPriorityHint(GeckoSession.PRIORITY_HIGH);
+            pipSession.getCompositorController().onPipModeChanged(isInPictureInPictureMode());
             setPictureInPictureParams(buildPipParams());
             if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)) {
                 enterPipIfNeeded();
             }
             return true;
         } catch (Throwable error) {
-            finishWindow(true, true);
+            finishWindow(true, false);
             return false;
         }
     }
@@ -360,11 +378,11 @@ public final class MediaPipActivity extends AppCompatActivity {
                 enteredPip = true;
             } else {
                 showPipStartFailure();
-                finishWindow(true, true);
+                finishWindow(true, false);
             }
         } catch (RuntimeException error) {
             showPipStartFailure();
-            finishWindow(true, true);
+            finishWindow(true, false);
         }
     }
 
@@ -388,6 +406,13 @@ public final class MediaPipActivity extends AppCompatActivity {
     @Override
     public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+        GeckoSession currentPipSession = pipSession;
+        if (currentPipSession != null) {
+            try {
+                currentPipSession.getCompositorController().onPipModeChanged(isInPictureInPictureMode);
+            } catch (RuntimeException ignored) {
+            }
+        }
         if (isInPictureInPictureMode) {
             enteredPip = true;
             return;

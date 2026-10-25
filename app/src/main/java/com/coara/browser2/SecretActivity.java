@@ -26,6 +26,7 @@ import android.os.Handler;
 import android.text.InputType;
 import android.util.Base64;
 import android.util.LruCache;
+import android.util.Rational;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
@@ -633,7 +634,8 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             schedulePluginReload();
         }
         TouchpadOverlayController.onHostResume(this, pref);
-            invalidateOptionsMenu();
+        updateHostPipParams();
+        invalidateOptionsMenu();
     }
 
     @Override
@@ -662,10 +664,79 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     protected void onUserLeaveHint() {
         super.onUserLeaveHint();
         boolean enabled = pref != null && pref.getBoolean("picture_in_picture_enabled", false);
+        if (!enabled || isFinishing() || !PictureInPictureSettings.isSystemPipAllowed(this)) {
+            return;
+        }
+        if (isNativeVideoPipEligible()) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                try {
+                    if (enterPictureInPictureMode(buildHostPipParams(true))) {
+                        return;
+                    }
+                } catch (RuntimeException ignored) {
+                }
+            } else {
+                return;
+            }
+        }
         BrowserView current = getCurrentWebView();
-        if (enabled && !isFinishing() && current != null && !current.isDestroyed()) {
+        if (current != null && !current.isDestroyed()) {
             current.requestPictureInPicture();
         }
+    }
+
+    private boolean isNativeVideoPipEligible() {
+        BrowserView target = fullScreenView;
+        boolean enabled = pref != null && pref.getBoolean("picture_in_picture_enabled", false);
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && !isFinishing()
+                && fullScreenActive
+                && enabled
+                && PictureInPictureSettings.isSystemPipAllowed(this)
+                && target != null
+                && !target.isDestroyed()
+                && target.isMediaPlaying();
+    }
+
+    private android.app.PictureInPictureParams buildHostPipParams(boolean autoEnter) {
+        android.app.PictureInPictureParams.Builder builder = new android.app.PictureInPictureParams.Builder()
+                .setAspectRatio(new Rational(16, 9));
+        BrowserView target = fullScreenView;
+        if (target != null && !target.isDestroyed()) {
+            android.graphics.Rect sourceRect = new android.graphics.Rect();
+            if (target.getGlobalVisibleRect(sourceRect) && sourceRect.width() > 0 && sourceRect.height() > 0) {
+                builder.setSourceRectHint(sourceRect);
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setAutoEnterEnabled(autoEnter);
+        }
+        return builder.build();
+    }
+
+    private void updateHostPipParams() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return;
+        }
+        try {
+            setPictureInPictureParams(buildHostPipParams(isNativeVideoPipEligible()));
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode,
+                                              android.content.res.Configuration newConfig) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+        BrowserView target = fullScreenView;
+        if (target != null && !target.isDestroyed()) {
+            target.setPictureInPictureActive(isInPictureInPictureMode);
+            try {
+                target.getGeckoSession().getCompositorController().onPipModeChanged(isInPictureInPictureMode);
+            } catch (Throwable ignored) {
+            }
+        }
+        updateHostPipParams();
     }
 
     @Override
@@ -676,8 +747,10 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         TouchpadOverlayController.onHostPause(this);
         PluginRuntime.onHostPause(this);
         com.coara.browser2.fx.FxExtensionManager.get().clearForeground(this);
+        boolean preservePipPlayback = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && isInPictureInPictureMode();
         BrowserView activeWebView = getCurrentWebView();
-        if (activeWebView != null) {
+        if (!preservePipPlayback && activeWebView != null) {
             try {
                 activeWebView.onPause();
                 activeWebView.pauseTimers();
@@ -982,6 +1055,7 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                 | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                 | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+        updateHostPipParams();
     }
 
     private void leaveFullScreen() {
@@ -995,6 +1069,7 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         }
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
         setRequestedOrientation(fullScreenPreviousOrientation);
+        updateHostPipParams();
     }
 
     private void navigateBackFromError(BrowserView view) {
@@ -1225,6 +1300,7 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                 com.coara.browser2.MediaPlaybackService.onPlaybackState(
                         SecretActivity.this, view.getGeckoSession(), mediaSession, playing, stopped,
                         "プライベート再生", "Coara Gecko");
+                updateHostPipParams();
             }
 
             @Override
@@ -1772,8 +1848,9 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                 pref.edit().putBoolean("picture_in_picture_enabled", enabled).apply();
             }
             if (!enabled) {
-                com.coara.browser2.MediaPipActivity.closeActive();
+                com.coara.browser2.MediaPipActivity.closeActivePreservingPlayback();
             }
+            updateHostPipParams();
             item.setChecked(enabled);
             invalidateOptionsMenu();
             Toast.makeText(this, enabled ? "小窓再生を有効にしました" : "小窓再生を無効にしました", Toast.LENGTH_SHORT).show();
