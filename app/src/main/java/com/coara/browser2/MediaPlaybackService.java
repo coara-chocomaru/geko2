@@ -148,7 +148,7 @@ public final class MediaPlaybackService extends Service {
                 }
                 String nextTitle = metadata == null ? "" : metadata.title;
                 String nextArtist = metadata == null ? "" : metadata.artist;
-                onMetadata(app, changedSession, nextTitle, nextArtist);
+                MediaPlaybackService.onMetadata(app, changedSession, nextTitle, nextArtist);
             }
 
             @Override
