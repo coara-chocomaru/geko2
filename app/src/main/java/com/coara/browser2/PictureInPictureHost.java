@@ -1,57 +1,45 @@
 package com.coara.browser2;
 
 import android.app.Activity;
-import android.app.PictureInPictureParams;
-import android.app.RemoteAction;
-import android.graphics.Color;
-import android.graphics.drawable.Icon;
+import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.TypedValue;
-import android.view.Gravity;
-import android.view.View;
-import android.view.ViewGroup;
-import android.widget.FrameLayout;
-import android.widget.TextView;
-
-import androidx.lifecycle.Lifecycle;
-import androidx.lifecycle.LifecycleOwner;
-
-import com.coara.browser2.gecko.BrowserEngine;
 import com.coara.browser2.gecko.BrowserView;
 import com.coara.browser2.util.PictureInPictureAspectRatio;
 import com.coara.browser2.util.PictureInPictureSettings;
 
 import org.mozilla.geckoview.GeckoSession;
 import org.mozilla.geckoview.GeckoSessionSettings;
-import org.mozilla.geckoview.GeckoView;
-import org.mozilla.geckoview.PictureInPictureController;
 
 import java.lang.ref.WeakReference;
-import java.util.ArrayList;
-import java.util.List;
 
 public final class PictureInPictureHost {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    private static final long TOKEN_TIMEOUT_MS = 6000L;
+    private static final long REQUEST_TIMEOUT_MS = 6500L;
     private static WeakReference<PictureInPictureHost> current = new WeakReference<>(null);
 
     private final Activity activity;
-    private final Runnable tokenTimeout = new Runnable() {
-        @Override
-        public void run() {
-            onTokenTimeout();
-        }
-    };
     private WeakReference<BrowserView> sourceView = new WeakReference<>(null);
     private GeckoSession sourceSession;
-    private FrameLayout overlay;
-    private TextView statusView;
-    private GeckoView pipView;
-    private GeckoSession pipSession;
-    private String pendingToken;
-    private boolean entering;
+    private boolean requestPending;
     private boolean active;
+    private final Runnable requestTimeout = new Runnable() {
+        @Override
+        public void run() {
+            if (requestPending && !active) {
+                BrowserView view = sourceView.get();
+                GeckoSession session = sourceSession;
+                if (view != null) {
+                    try {
+                        view.rejectPictureInPictureRequest();
+                    } catch (Throwable ignored) {
+                    }
+                }
+                clearState();
+                releaseSource(session, view, true);
+            }
+        }
+    };
 
     public PictureInPictureHost(Activity activity) {
         this.activity = activity;
@@ -62,8 +50,12 @@ public final class PictureInPictureHost {
             @Override
             public void run() {
                 PictureInPictureHost host = current.get();
-                if (host != null) {
-                    host.refreshParams();
+                PictureInPictureActivity pipActivity = PipSessionHolder.getActiveActivity();
+                if (pipActivity != null) {
+                    pipActivity.refreshPipParams();
+                }
+                if (host != null && host.active) {
+                    host.refreshActiveState();
                 }
             }
         });
@@ -76,6 +68,18 @@ public final class PictureInPictureHost {
                 PictureInPictureHost host = current.get();
                 if (host != null) {
                     host.onMediaEnded();
+                } else {
+                    PictureInPictureActivity pipActivity = PipSessionHolder.getActiveActivity();
+                    GeckoSession source = PipSessionHolder.sourceSession;
+                    if (source != null) {
+                        BrowserView view = PipSessionHolder.sourceView.get();
+                        if (pipActivity != null) {
+                            pipActivity.closeForHost(source);
+                        }
+                        closePendingClone();
+                        PipSessionHolder.clear(source);
+                        releaseSource(source, view, true);
+                    }
                 }
             }
         });
@@ -91,6 +95,15 @@ public final class PictureInPictureHost {
                 PictureInPictureHost host = current.get();
                 if (host != null && host.sourceSession == session) {
                     host.onMediaEnded();
+                } else if (PipSessionHolder.sourceSession == session) {
+                    PictureInPictureActivity pipActivity = PipSessionHolder.getActiveActivity();
+                    if (pipActivity != null) {
+                        pipActivity.closeForHost(session);
+                    }
+                    closePendingClone();
+                    BrowserView view = PipSessionHolder.sourceView.get();
+                    PipSessionHolder.clear(session);
+                    releaseSource(session, view, true);
                 }
             }
         });
@@ -106,6 +119,17 @@ public final class PictureInPictureHost {
                 PictureInPictureHost host = current.get();
                 if (host != null && host.isSource(view)) {
                     host.onMediaEnded();
+                    return;
+                }
+                GeckoSession source = PipSessionHolder.sourceSession;
+                if (source != null && PipSessionHolder.sourceView.get() == view) {
+                    PictureInPictureActivity pipActivity = PipSessionHolder.getActiveActivity();
+                    if (pipActivity != null) {
+                        pipActivity.closeForHost(source);
+                    }
+                    closePendingClone();
+                    PipSessionHolder.clear(source);
+                    releaseSource(source, view, true);
                 }
             }
         });
@@ -121,29 +145,45 @@ public final class PictureInPictureHost {
 
     private boolean isSource(BrowserView view) {
         BrowserView source = sourceView.get();
-        return source == view || (sourceSession != null && view.getGeckoSession() == sourceSession);
+        return source == view || (sourceSession != null && view != null && view.getGeckoSession() == sourceSession);
     }
 
     public boolean isShowing() {
-        return overlay != null;
+        return requestPending || active || (sourceSession != null && PipSessionHolder.sourceSession == sourceSession);
     }
 
     public boolean onUserLeaveHint(BrowserView view) {
-        if (view == null || overlay != null || activity.isFinishing() || !PictureInPictureSettings.isSystemPipAllowed(activity)
-                || activity.isInPictureInPictureMode()) {
+        if (view == null || activity.isFinishing() || activity.isDestroyed()
+                || !PictureInPictureSettings.isSystemPipAllowed(activity)
+                || !view.isMediaPlaying() || PictureInPictureAspectRatio.videoState(view) < 0) {
             return false;
         }
-        if (!view.isMediaPlaying() || PictureInPictureAspectRatio.videoState(view) < 0) {
+        PictureInPictureActivity existing = PipSessionHolder.getActiveActivity();
+        if (existing != null && !existing.isFinishing()) {
             return false;
         }
         if (view.isPictureInPictureActiveOrPending()) {
             view.rejectPictureInPictureRequest();
         }
-        if (!begin(view)) {
+        sourceView = new WeakReference<>(view);
+        sourceSession = view.getGeckoSession();
+        if (sourceSession == null) {
+            clearState();
             return false;
         }
-        if (!view.requestPictureInPicture()) {
-            release(false);
+        requestPending = true;
+        active = false;
+        current = new WeakReference<>(this);
+        MAIN.removeCallbacks(requestTimeout);
+        MAIN.postDelayed(requestTimeout, REQUEST_TIMEOUT_MS);
+        boolean accepted = view.requestPictureInPicture(new Runnable() {
+            @Override
+            public void run() {
+                onPipRequestFailed(view);
+            }
+        });
+        if (!accepted) {
+            clearState();
             return false;
         }
         return true;
@@ -151,339 +191,160 @@ public final class PictureInPictureHost {
 
     public boolean onTokenReceived(BrowserView view, String token) {
         if (view == null || token == null || token.isEmpty() || activity.isFinishing()
-                || !PictureInPictureSettings.isSystemPipAllowed(activity)) {
+                || activity.isDestroyed() || !PictureInPictureSettings.isSystemPipAllowed(activity)) {
             return false;
         }
-        pendingToken = token;
-        if (overlay == null && !begin(view)) {
-            pendingToken = null;
+        GeckoSession session = view.getGeckoSession();
+        if (session == null || view.isDestroyed()) {
             return false;
         }
-        if (activity.isInPictureInPictureMode()) {
-            attachClone();
-            updatePipCompositorMode(true);
+        if ((requestPending || active) && sourceSession != null && sourceSession != session) {
+            return false;
         }
-        return true;
+        PictureInPictureActivity existing = PipSessionHolder.getActiveActivity();
+        if (existing != null && !existing.isFinishing()) {
+            if (PipSessionHolder.sourceSession == session) {
+                return true;
+            }
+            return false;
+        }
+        if (sourceSession != null && sourceSession != session && PipSessionHolder.sourceSession != null) {
+            return false;
+        }
+        sourceSession = session;
+        sourceView = new WeakReference<>(view);
+        requestPending = false;
+        active = true;
+        current = new WeakReference<>(this);
+        MAIN.removeCallbacks(requestTimeout);
+        GeckoSession clone = null;
+        try {
+            GeckoSessionSettings settings = new GeckoSessionSettings.Builder()
+                    .pictureInPictureToken(token)
+                    .suspendMediaWhenInactive(false)
+                    .build();
+            clone = new GeckoSession(settings);
+            clone.open(BrowserEngine.get().getRuntime());
+            clone.getSettings().setSuspendMediaWhenInactive(false);
+            clone.getCompositorController().setClearColor(android.graphics.Color.BLACK);
+            clone.setActive(true);
+            clone.setPriorityHint(GeckoSession.PRIORITY_HIGH);
+            view.setPictureInPictureActive(true);
+            session.getSessionPictureInPicture().setKeepActive(true);
+            PipSessionHolder.setPending(clone, session, activity, view, PictureInPictureAspectRatio.getCached(view));
+            activity.startActivity(new Intent(activity, PictureInPictureActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            refreshActiveState();
+            return true;
+        } catch (Throwable error) {
+            if (clone != null) {
+                try {
+                    clone.setActive(false);
+                    clone.close();
+                } catch (Throwable ignored) {
+                }
+            }
+            clearState();
+            releaseSource(session, view, true);
+            return false;
+        }
+    }
+
+    private void onPipRequestFailed(BrowserView view) {
+        if (!isSource(view) || active) {
+            return;
+        }
+        GeckoSession session = sourceSession;
+        clearState();
+        if (view != null) {
+            view.setPictureInPictureActive(false);
+            view.setPictureInPicturePending(false);
+        }
+        if (session != null && PipSessionHolder.sourceSession == session) {
+            PipSessionHolder.clear(session);
+        }
     }
 
     public void onGeckoClosed(BrowserView view) {
         if (view == null) {
             return;
         }
-        if (overlay == null || !isSource(view)) {
+        if (!isSource(view)) {
             view.setPictureInPictureActive(false);
             return;
         }
-        onMediaEnded();
+        GeckoSession session = sourceSession;
+        PictureInPictureActivity pipActivity = PipSessionHolder.getActiveActivity();
+        if (pipActivity != null && session != null) {
+            pipActivity.closeForGecko(session);
+        }
+        clearState();
+        releaseSource(session, view, false);
     }
 
     public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode) {
-        updateCompositorPipMode(sourceSession, isInPictureInPictureMode);
         if (isInPictureInPictureMode) {
-            if (overlay == null) {
-                return;
-            }
-            entering = false;
-            active = true;
-            current = new WeakReference<>(this);
-            MAIN.removeCallbacks(tokenTimeout);
-            if (pipSession == null) {
-                MAIN.postDelayed(tokenTimeout, TOKEN_TIMEOUT_MS);
-            }
-            attachClone();
-            updatePipCompositorMode(true);
-            refreshParams();
-            return;
+            refreshActiveState();
         }
-        if (overlay == null && !active && !entering) {
-            return;
-        }
-        updatePipCompositorMode(false);
-        release(!isActivityVisible());
     }
 
     public void onStop() {
-        if (overlay != null && !entering && !activity.isInPictureInPictureMode()) {
-            release(active);
-        }
     }
 
     public void onDestroy() {
-        if (overlay != null || active || entering) {
-            release(active && !activity.isChangingConfigurations());
+        if (requestPending && !active) {
+            GeckoSession session = sourceSession;
+            BrowserView view = sourceView.get();
+            if (view != null) {
+                try {
+                    view.rejectPictureInPictureRequest();
+                } catch (Throwable ignored) {
+                }
+            }
+            clearState();
+            releaseSource(session, view, true);
         }
     }
 
     public void close() {
-        if (overlay != null) {
-            onMediaEnded();
-        }
-    }
-
-    private boolean isActivityVisible() {
-        if (activity instanceof LifecycleOwner) {
-            return ((LifecycleOwner) activity).getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED);
-        }
-        return true;
-    }
-
-    private boolean begin(BrowserView view) {
-        GeckoSession session = view.getGeckoSession();
-        if (session == null) {
-            return false;
-        }
-        sourceView = new WeakReference<>(view);
-        sourceSession = session;
-        showCover();
-        boolean hasToken = pendingToken != null && !pendingToken.isEmpty();
-        if (hasToken) {
-            attachClone();
-            if (pipSession == null) {
-                removeOverlay();
-                sourceView = new WeakReference<>(null);
-                sourceSession = null;
-                pendingToken = null;
-                return false;
-            }
-        }
-        entering = true;
-        boolean entered;
-        try {
-            entered = activity.enterPictureInPictureMode(buildParams());
-        } catch (RuntimeException error) {
-            entered = false;
-        }
-        if (!entered) {
-            entering = false;
-            removeOverlay();
-            sourceView = new WeakReference<>(null);
-            sourceSession = null;
-            pendingToken = null;
-            return false;
-        }
-        current = new WeakReference<>(this);
-        return true;
-    }
-
-    private void showCover() {
-        if (overlay != null) {
-            return;
-        }
-        FrameLayout layer = new FrameLayout(activity);
-        layer.setBackgroundColor(Color.BLACK);
-        layer.setClickable(false);
-        layer.setFocusable(false);
-        TextView status = new TextView(activity);
-        status.setTextColor(0xFFB0B0B0);
-        status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        status.setGravity(Gravity.CENTER);
-        status.setText("小窓再生を準備中");
-        layer.addView(status, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        activity.addContentView(layer, new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        overlay = layer;
-        statusView = status;
-    }
-
-    private void showStatus(String text) {
-        if (statusView != null) {
-            statusView.setText(text);
-            statusView.setVisibility(View.VISIBLE);
-        }
-    }
-
-    private void attachClone() {
-        String token = pendingToken;
-        if (token == null || token.isEmpty() || overlay == null || pipSession != null) {
-            return;
-        }
-        pendingToken = null;
-        GeckoView view = null;
-        GeckoSession session = null;
-        try {
-            view = new GeckoView(activity);
-            view.setFocusable(true);
-            view.setFocusableInTouchMode(true);
-            view.setBackgroundColor(Color.BLACK);
-            GeckoSessionSettings settings = new GeckoSessionSettings.Builder()
-                    .pictureInPictureToken(token)
-                    .suspendMediaWhenInactive(false)
-                    .build();
-            session = new GeckoSession(settings);
-            session.setPictureInPictureDelegate(new PictureInPictureController.SessionPictureInPicture.Delegate() {
-                @Override
-                public void onExitPictureInPicture(GeckoSession exited) {
-                    MAIN.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (pipSession == exited) {
-                                onMediaEnded();
-                            }
-                        }
-                    });
-                }
-            });
-            session.open(BrowserEngine.get().getRuntime());
-            session.getSettings().setSuspendMediaWhenInactive(false);
-            session.getSessionPictureInPicture().setKeepActive(true);
-            session.setActive(true);
-            session.setPriorityHint(GeckoSession.PRIORITY_HIGH);
-            pipView = view;
-            pipSession = session;
-            view.setSession(session);
-            overlay.addView(view, new FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-            view.setVisibility(View.VISIBLE);
-            view.requestLayout();
-            view.invalidate();
-            final GeckoView attachedView = view;
-            final GeckoSession attachedSession = session;
-            view.post(new Runnable() {
-                @Override
-                public void run() {
-                    if (pipView != attachedView || pipSession != attachedSession || !attachedView.isAttachedToWindow()) {
-                        return;
-                    }
-                    initializeCloneCompositor(attachedView, attachedSession);
-                }
-            });
-            if (statusView != null) {
-                statusView.setVisibility(View.GONE);
-            }
-            MAIN.removeCallbacks(tokenTimeout);
-        } catch (Throwable error) {
-            if (session != null && pipSession != session) {
-                try {
-                    session.close();
-                } catch (Throwable ignored) {
-                }
-            }
-            detachClone();
-            showStatus("この動画は小窓に表示できません");
-        }
-    }
-
-    private void initializeCloneCompositor(GeckoView view, GeckoSession session) {
-        if (pipView != view || pipSession != session || !view.isAttachedToWindow()) {
-            return;
-        }
-        try {
-            session.getCompositorController().setClearColor(Color.BLACK);
-            session.getCompositorController().onPipModeChanged(activity.isInPictureInPictureMode());
-            session.getSettings().setSuspendMediaWhenInactive(false);
-            session.getSessionPictureInPicture().setKeepActive(true);
-            session.setActive(true);
-            session.setPriorityHint(GeckoSession.PRIORITY_HIGH);
-            view.requestLayout();
-            view.invalidate();
-        } catch (Throwable ignored) {
-        }
-    }
-
-    private void updateCompositorPipMode(GeckoSession session, boolean enabled) {
-        if (session == null) {
-            return;
-        }
-        try {
-            session.getCompositorController().onPipModeChanged(enabled);
-        } catch (Throwable ignored) {
-        }
-    }
-
-    private void updatePipCompositorMode(boolean enabled) {
-        GeckoView view = pipView;
-        GeckoSession session = pipSession;
-        if (view == null || session == null) {
-            return;
-        }
-        if (!enabled) {
-            updateCompositorPipMode(session, false);
-            return;
-        }
-        view.post(new Runnable() {
-            @Override
-            public void run() {
-                if (pipView == view && pipSession == session && view.isAttachedToWindow()) {
-                    initializeCloneCompositor(view, session);
-                }
-            }
-        });
-    }
-
-    private void detachClone() {
-        GeckoSession session = pipSession;
-        GeckoView view = pipView;
-        pipSession = null;
-        pipView = null;
-        if (session != null) {
-            try {
-                session.getCompositorController().onPipModeChanged(false);
-            } catch (Throwable ignored) {
-            }
-            try {
-                session.getSessionPictureInPicture().setKeepActive(false);
-            } catch (Throwable ignored) {
-            }
-            try {
-                session.getSettings().setSuspendMediaWhenInactive(true);
-            } catch (Throwable ignored) {
-            }
-            try {
-                session.setActive(false);
-                session.setPriorityHint(GeckoSession.PRIORITY_DEFAULT);
-            } catch (Throwable ignored) {
-            }
-        }
-        if (view != null) {
-            try {
-                view.releaseSession();
-            } catch (Throwable ignored) {
-            }
-            ViewGroup parent = view.getParent() instanceof ViewGroup ? (ViewGroup) view.getParent() : null;
-            if (parent != null) {
-                parent.removeView(view);
-            }
-        }
-        if (session != null) {
-            try {
-                session.close();
-            } catch (Throwable ignored) {
-            }
-        }
-    }
-
-    private void onTokenTimeout() {
-        if (overlay != null && pipSession == null) {
-            pendingToken = null;
-            showStatus("この動画は小窓に表示できません。音声は再生を続けます");
-            BrowserView view = sourceView.get();
-            if (view != null) {
-                view.setPictureInPictureActive(false);
-            }
-        }
+        onMediaEnded();
     }
 
     private void onMediaEnded() {
-        if (overlay == null) {
-            return;
+        GeckoSession session = sourceSession;
+        BrowserView view = sourceView.get();
+        PictureInPictureActivity pipActivity = PipSessionHolder.getActiveActivity();
+        if (pipActivity != null && session != null) {
+            pipActivity.closeForHost(session);
         }
-        if (!active) {
-            release(false);
-            return;
-        }
-        MAIN.removeCallbacks(tokenTimeout);
-        pendingToken = null;
-        detachClone();
-        showStatus("再生が終了しました");
-        releaseSource();
-        refreshParams();
+        clearState();
+        releaseSource(session, view, true);
     }
 
-    private void releaseSource() {
-        BrowserView view = sourceView.get();
-        GeckoSession session = sourceSession;
-        if (session != null) {
+    private void refreshActiveState() {
+        PictureInPictureActivity pipActivity = PipSessionHolder.getActiveActivity();
+        if (pipActivity != null) {
+            pipActivity.refreshPipParams();
+        }
+    }
+
+    private void clearState() {
+        MAIN.removeCallbacks(requestTimeout);
+        requestPending = false;
+        active = false;
+        GeckoSession oldSession = sourceSession;
+        sourceSession = null;
+        sourceView = new WeakReference<>(null);
+        if (current.get() == this) {
+            current = new WeakReference<>(null);
+        }
+        if (oldSession != null) {
+            PipSessionHolder.clear(oldSession);
+        }
+    }
+
+    private static void releaseSource(GeckoSession session, BrowserView view, boolean notifyGecko) {
+        if (session != null && notifyGecko) {
             try {
                 session.getSessionPictureInPicture().exit();
             } catch (Throwable ignored) {
@@ -491,97 +352,32 @@ public final class PictureInPictureHost {
         }
         if (view != null && session != null && view.getGeckoSession() == session) {
             view.setPictureInPictureActive(false);
+            view.setPictureInPicturePending(false);
         } else if (session != null && !MediaPlaybackService.isRetainedSessionPlaying(session)) {
             try {
                 session.getSessionPictureInPicture().setKeepActive(false);
             } catch (Throwable ignored) {
             }
             try {
+                session.getSettings().setSuspendMediaWhenInactive(true);
                 session.setActive(false);
+                session.setPriorityHint(GeckoSession.PRIORITY_DEFAULT);
             } catch (Throwable ignored) {
             }
             MediaPlaybackService.onPipClosed(session);
         }
     }
 
-    private void release(boolean pauseMedia) {
-        MAIN.removeCallbacks(tokenTimeout);
-        pendingToken = null;
-        detachClone();
-        removeOverlay();
-        releaseSource();
-        sourceView = new WeakReference<>(null);
-        sourceSession = null;
-        entering = false;
-        active = false;
-        if (current.get() == this) {
-            current = new WeakReference<>(null);
-        }
-        if (pauseMedia) {
-            MediaPlaybackService.pauseActive();
-        }
-    }
-
-    private void removeOverlay() {
-        FrameLayout layer = overlay;
-        overlay = null;
-        statusView = null;
-        if (layer != null && layer.getParent() instanceof ViewGroup) {
-            ((ViewGroup) layer.getParent()).removeView(layer);
-        }
-    }
-
-    private void refreshParams() {
-        if (!active || activity.isFinishing() || activity.isDestroyed()) {
+    public static void onPipActivityClosed(GeckoSession sourceSession, BrowserView sourceView) {
+        if (sourceSession == null) {
             return;
         }
-        try {
-            activity.setPictureInPictureParams(buildParams());
-        } catch (RuntimeException ignored) {
-        }
-    }
-
-    private PictureInPictureParams buildParams() {
-        PictureInPictureParams.Builder builder = new PictureInPictureParams.Builder();
-        BrowserView view = sourceView.get();
-        builder.setAspectRatio(view == null ? PictureInPictureAspectRatio.defaultAspectRatio()
-                : PictureInPictureAspectRatio.getCached(view));
-        List<RemoteAction> actions = buildActions();
-        if (!actions.isEmpty()) {
-            builder.setActions(actions);
-        }
-        return builder.build();
-    }
-
-    private List<RemoteAction> buildActions() {
-        List<RemoteAction> actions = new ArrayList<>(3);
-        int max;
-        try {
-            max = activity.getMaxNumPictureInPictureActions();
-        } catch (RuntimeException error) {
-            max = 3;
-        }
-        if (max <= 0) {
-            return actions;
-        }
-        boolean playing = MediaPlaybackService.isPlaying();
-        RemoteAction toggle = remoteAction(
-                playing ? R.drawable.ic_pip_pause : R.drawable.ic_pip_play,
-                playing ? "一時停止" : "再生",
-                playing ? MediaPlaybackService.ACTION_PAUSE : MediaPlaybackService.ACTION_PLAY,
-                playing ? 7422 : 7423);
-        if (max >= 3) {
-            actions.add(remoteAction(R.drawable.ic_pip_rewind, "巻き戻し", MediaPlaybackService.ACTION_SEEK_BACK, 7421));
-            actions.add(toggle);
-            actions.add(remoteAction(R.drawable.ic_pip_forward, "早送り", MediaPlaybackService.ACTION_SEEK_FORWARD, 7424));
+        PictureInPictureHost host = current.get();
+        if (host != null && host.sourceSession == sourceSession) {
+            host.clearState();
         } else {
-            actions.add(toggle);
+            PipSessionHolder.clear(sourceSession);
         }
-        return actions;
-    }
-
-    private RemoteAction remoteAction(int icon, String label, String action, int requestCode) {
-        return new RemoteAction(Icon.createWithResource(activity, icon), label, label,
-                MediaPlaybackService.controlIntent(activity, action, requestCode));
+        releaseSource(sourceSession, sourceView, true);
     }
 }
