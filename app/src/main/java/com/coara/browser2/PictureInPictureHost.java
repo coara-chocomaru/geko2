@@ -34,8 +34,6 @@ public final class PictureInPictureHost {
     private static final long ENTER_TIMEOUT_MS = 2500L;
     private static final long COMPOSITOR_KICK_DELAY_MS = 400L;
     private static final long FIRST_PROBE_DELAY_MS = 1500L;
-    private static final long PROBE_INTERVAL_MS = 1200L;
-    private static final int MAX_PROBES = 4;
     private static WeakReference<PictureInPictureHost> current = new WeakReference<>(null);
 
     private final Activity activity;
@@ -44,11 +42,7 @@ public final class PictureInPictureHost {
     private boolean entering;
     private boolean inPip;
     private boolean chromeApplied;
-    private boolean userPaused;
-    private boolean pipDesktopModeApplied;
     private boolean pipMediaEnded;
-    private int probeRound;
-    private double lastProbeTime = Double.NaN;
     private final Runnable probeRunnable = new Runnable() {
         @Override
         public void run() {
@@ -97,30 +91,6 @@ public final class PictureInPictureHost {
         if (component != null && owner.getPackageName().equals(component.getPackageName())) {
             intent.addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION);
         }
-    }
-
-    public static void noteUserPause() {
-        MAIN.post(new Runnable() {
-            @Override
-            public void run() {
-                PictureInPictureHost host = current.get();
-                if (host != null) {
-                    host.userPaused = true;
-                }
-            }
-        });
-    }
-
-    public static void noteUserPlay() {
-        MAIN.post(new Runnable() {
-            @Override
-            public void run() {
-                PictureInPictureHost host = current.get();
-                if (host != null) {
-                    host.userPaused = false;
-                }
-            }
-        });
     }
 
     public static boolean isPipShowing() {
@@ -296,11 +266,9 @@ public final class PictureInPictureHost {
         sourceView = new WeakReference<>(view);
         current = new WeakReference<>(this);
         entering = true;
-        userPaused = false;
         pipMediaEnded = false;
         view.setPictureInPictureActive(true);
         keepSessionActive(view);
-        applyPipDesktopMode(view);
         PictureInPictureLayout.enter(view);
         PictureInPictureAspectRatio.query(view, true, ratio -> refreshParams());
         boolean accepted;
@@ -327,7 +295,6 @@ public final class PictureInPictureHost {
         if (view != null) {
             notifyCompositor(view, false);
             PictureInPictureLayout.exit(view);
-            restorePipDesktopMode(view);
             view.setPictureInPictureActive(false);
         }
         sourceView = new WeakReference<>(null);
@@ -350,14 +317,11 @@ public final class PictureInPictureHost {
             setChrome(true);
             view.setPictureInPictureActive(true);
             keepSessionActive(view);
-            applyPipDesktopMode(view);
             PictureInPictureLayout.enter(view);
             notifyCompositor(view, true);
             refreshParams();
             MAIN.removeCallbacks(compositorKick);
             MAIN.postDelayed(compositorKick, COMPOSITOR_KICK_DELAY_MS);
-            probeRound = 0;
-            lastProbeTime = Double.NaN;
             MAIN.removeCallbacks(probeRunnable);
             MAIN.postDelayed(probeRunnable, FIRST_PROBE_DELAY_MS);
             return;
@@ -375,7 +339,6 @@ public final class PictureInPictureHost {
         if (view != null) {
             notifyCompositor(view, false);
             PictureInPictureLayout.exit(view);
-            restorePipDesktopMode(view);
         }
         MAIN.removeCallbacks(dismissCheck);
         MAIN.postDelayed(dismissCheck, DISMISS_CHECK_DELAY_MS);
@@ -401,62 +364,11 @@ public final class PictureInPictureHost {
         if (!inPip || view.isDestroyed()) {
             return;
         }
-        JSONObject result = null;
         try {
-            result = new JSONObject(value);
-        } catch (Throwable ignored) {
-        }
-        probeRound++;
-        if (result != null && !result.optBoolean("nv", false) && !result.has("err")) {
-            boolean paused = result.optBoolean("p", false);
-            boolean ended = result.optBoolean("e", false);
-            pipMediaEnded = pipMediaEnded || ended;
-            int readyState = result.optInt("rs", 0);
-            double time = result.optDouble("t", Double.NaN);
-            if (!ended) {
-                if (paused && !userPaused) {
-                    keepSessionActive(view);
-                    notifyCompositor(view, true);
-                    PictureInPictureLayout.resume(view);
-                } else if (!paused && readyState >= 3 && !Double.isNaN(lastProbeTime)
-                        && !Double.isNaN(time) && Math.abs(time - lastProbeTime) < 0.15d && !userPaused) {
-                    keepSessionActive(view);
-                    notifyCompositor(view, false);
-                    notifyCompositor(view, true);
-                }
+            JSONObject result = new JSONObject(value);
+            if (!result.optBoolean("nv", false) && !result.has("err")) {
+                pipMediaEnded = pipMediaEnded || result.optBoolean("e", false);
             }
-            lastProbeTime = time;
-        }
-        if (probeRound < MAX_PROBES) {
-            MAIN.removeCallbacks(probeRunnable);
-            MAIN.postDelayed(probeRunnable, PROBE_INTERVAL_MS);
-        }
-    }
-
-    private void applyPipDesktopMode(BrowserView view) {
-        if (pipDesktopModeApplied || view == null || view.isDestroyed()) {
-            return;
-        }
-        try {
-            com.coara.browser2.gecko.BrowserSettings settings = view.getSettings();
-            if (!settings.isDesktopMode() && settings.getUserAgentOverride() == null) {
-                settings.setDesktopMode(true);
-                pipDesktopModeApplied = true;
-            }
-        } catch (Throwable ignored) {
-        }
-    }
-
-    private void restorePipDesktopMode(BrowserView view) {
-        if (!pipDesktopModeApplied) {
-            return;
-        }
-        pipDesktopModeApplied = false;
-        if (view == null || view.isDestroyed()) {
-            return;
-        }
-        try {
-            view.getSettings().setDesktopMode(false);
         } catch (Throwable ignored) {
         }
     }
@@ -534,7 +446,6 @@ public final class PictureInPictureHost {
         if (view != null && (inPip || entering)) {
             notifyCompositor(view, false);
             PictureInPictureLayout.exit(view);
-            restorePipDesktopMode(view);
             view.setPictureInPictureActive(false);
         }
         entering = false;

@@ -743,7 +743,6 @@ public final class MediaPlaybackService extends Service {
         }
         try {
             if (ACTION_PLAY.equals(action)) {
-                com.coara.browser2.PictureInPictureHost.noteUserPlay();
                 playing = true;
                 transientFocusLoss = false;
                 com.coara.browser2.PictureInPictureHost.playPipMediaIfEnded(() -> {
@@ -754,7 +753,6 @@ public final class MediaPlaybackService extends Service {
                     }
                 });
             } else if (ACTION_PAUSE.equals(action)) {
-                PictureInPictureHost.noteUserPause();
                 playing = false;
                 transientFocusLoss = false;
                 session.pause();
