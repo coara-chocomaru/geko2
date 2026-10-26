@@ -35,10 +35,9 @@ public final class PictureInPictureActivity extends AppCompatActivity {
     private android.app.Activity sourceActivity;
     private Class<?> sourceActivityClass;
     private boolean renderReady;
-    private boolean firstContentfulPaintReceived;
     private boolean resumed;
     private boolean enteredPip;
-    private boolean returningToSource;
+    private boolean pipExitPending;
     private boolean closeFromGecko;
     private boolean closeFromHost;
     private int drawCount;
@@ -49,6 +48,19 @@ public final class PictureInPictureActivity extends AppCompatActivity {
             if (!enteredPip && !isFinishing()) {
                 finish();
             }
+        }
+    };
+    private final Runnable pipExitCheck = new Runnable() {
+        @Override
+        public void run() {
+            if (isFinishing() || isDestroyed() || isInPictureInPictureMode()) {
+                return;
+            }
+            if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) {
+                pipExitPending = false;
+                returnToSource();
+            }
+            finish();
         }
     };
 
@@ -116,24 +128,15 @@ public final class PictureInPictureActivity extends AppCompatActivity {
             geckoSession.setActive(true);
             geckoSession.setPriorityHint(GeckoSession.PRIORITY_HIGH);
             geckoSession.getCompositorController().setClearColor(Color.BLACK);
-            geckoSession.setContentDelegate(new GeckoSession.ContentDelegate() {
-                @Override
-                public void onFirstContentfulPaint(GeckoSession session) {
-                    if (session == geckoSession) {
-                        firstContentfulPaintReceived = true;
-                        checkRenderReady();
-                    }
-                }
-            });
-            geckoView.setSession(geckoSession);
             registerDrawCallback();
-            geckoSession.loadUri("about:blank");
+            geckoView.setSession(geckoSession);
             geckoView.post(new Runnable() {
                 @Override
                 public void run() {
                     if (geckoView != null && geckoView.isAttachedToWindow()) {
                         geckoView.requestLayout();
                         geckoView.invalidate();
+                        checkRenderReady();
                     }
                 }
             });
@@ -166,7 +169,7 @@ public final class PictureInPictureActivity extends AppCompatActivity {
     }
 
     private void checkRenderReady() {
-        if (renderReady || isFinishing() || !firstContentfulPaintReceived || drawCount < 2) {
+        if (renderReady || isFinishing() || drawCount < 1) {
             return;
         }
         renderReady = true;
@@ -191,8 +194,9 @@ public final class PictureInPictureActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         resumed = true;
-        if (returningToSource) {
-            returningToSource = false;
+        if (pipExitPending) {
+            pipExitPending = false;
+            main.removeCallbacks(pipExitCheck);
             returnToSource();
             finish();
             return;
@@ -240,12 +244,10 @@ public final class PictureInPictureActivity extends AppCompatActivity {
         if (!enteredPip) {
             return;
         }
-        if (getLifecycle().getCurrentState() == Lifecycle.State.CREATED) {
-            main.removeCallbacks(renderTimeout);
-            finish();
-        } else {
-            returningToSource = true;
-        }
+        main.removeCallbacks(renderTimeout);
+        pipExitPending = true;
+        main.removeCallbacks(pipExitCheck);
+        main.postDelayed(pipExitCheck, 180L);
     }
 
     private void updateCompositorPipMode(boolean enabled) {
@@ -370,6 +372,7 @@ public final class PictureInPictureActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         main.removeCallbacksAndMessages(null);
+        pipExitPending = false;
         if (drawCallback != null && geckoSession != null) {
             try {
                 geckoSession.getCompositorController().removeDrawCallback(drawCallback);

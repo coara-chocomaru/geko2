@@ -34,7 +34,8 @@ public final class PictureInPictureHost {
             }
             PictureInPictureActivity pipActivity = PipSessionHolder.getActiveActivity();
             boolean activityAlive = pipActivity != null && !pipActivity.isFinishing();
-            if (active && activityAlive) {
+            boolean enteredSystemPip = activityAlive && pipActivity.isInPictureInPictureMode();
+            if (active && enteredSystemPip) {
                 return;
             }
             BrowserView view = sourceView.get();
@@ -47,7 +48,7 @@ public final class PictureInPictureHost {
             if (activityAlive) {
                 pipActivity.closeForHost(session);
             }
-            closePendingClone();
+            closePendingClone(session);
             clearState();
             releaseSource(session, view, true);
         }
@@ -98,7 +99,7 @@ public final class PictureInPictureHost {
                         if (pipActivity != null) {
                             pipActivity.closeForHost(source);
                         }
-                        closePendingClone();
+                        closePendingClone(source);
                         PipSessionHolder.clear(source);
                         releaseSource(source, view, true);
                     }
@@ -122,7 +123,7 @@ public final class PictureInPictureHost {
                     if (pipActivity != null) {
                         pipActivity.closeForHost(session);
                     }
-                    closePendingClone();
+                    closePendingClone(session);
                     BrowserView view = PipSessionHolder.sourceView.get();
                     PipSessionHolder.clear(session);
                     releaseSource(session, view, true);
@@ -149,7 +150,7 @@ public final class PictureInPictureHost {
                     if (pipActivity != null) {
                         pipActivity.closeForHost(source);
                     }
-                    closePendingClone();
+                    closePendingClone(source);
                     PipSessionHolder.clear(source);
                     releaseSource(source, view, true);
                 }
@@ -163,6 +164,13 @@ public final class PictureInPictureHost {
         } else {
             MAIN.post(runnable);
         }
+    }
+
+    private static void closePendingClone(GeckoSession expectedSource) {
+        if (expectedSource != null && PipSessionHolder.sourceSession != expectedSource) {
+            return;
+        }
+        closePendingClone();
     }
 
     private static void closePendingClone() {
@@ -216,7 +224,7 @@ public final class PictureInPictureHost {
 
     private void cancelRequest(GeckoSession session, BrowserView view) {
         closePipActivityFor(session);
-        closePendingClone();
+        closePendingClone(session);
         clearState();
         releaseSource(session, view, false);
     }
@@ -228,7 +236,7 @@ public final class PictureInPictureHost {
         if (!PictureInPictureSettings.isSystemPipAllowed(activity)) {
             return false;
         }
-        if (!view.isMediaPlaying() || PictureInPictureAspectRatio.videoState(view) < 0) {
+        if (!view.isMediaPlaying()) {
             return true;
         }
         GeckoSession session = view.getGeckoSession();
@@ -341,7 +349,7 @@ public final class PictureInPictureHost {
                 }
             }
             closePipActivityFor(session);
-            closePendingClone();
+            closePendingClone(session);
             clearState();
             releaseSource(session, view, true);
             return false;
@@ -354,7 +362,7 @@ public final class PictureInPictureHost {
         }
         GeckoSession session = sourceSession;
         closePipActivityFor(session);
-        closePendingClone();
+        closePendingClone(session);
         clearState();
         if (view != null) {
             view.setPictureInPictureActive(false);
@@ -378,7 +386,7 @@ public final class PictureInPictureHost {
         if (pipActivity != null && session != null) {
             pipActivity.closeForGecko(session);
         }
-        closePendingClone();
+        closePendingClone(session);
         clearState();
         releaseSource(session, view, false);
     }
@@ -403,7 +411,7 @@ public final class PictureInPictureHost {
                 }
             }
             closePipActivityFor(session);
-            closePendingClone();
+            closePendingClone(session);
             clearState();
             releaseSource(session, view, true);
         }
@@ -420,7 +428,7 @@ public final class PictureInPictureHost {
         if (pipActivity != null && session != null) {
             pipActivity.closeForHost(session);
         }
-        closePendingClone();
+        closePendingClone(session);
         clearState();
         releaseSource(session, view, true);
     }
@@ -477,6 +485,7 @@ public final class PictureInPictureHost {
             return;
         }
         PictureInPictureHost host = current.get();
+        closePendingClone(sourceSession);
         if (host != null && host.sourceSession == sourceSession) {
             host.clearState();
         } else {
