@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
+import com.coara.browser2.gecko.BrowserEngine;
 import com.coara.browser2.gecko.BrowserView;
 import com.coara.browser2.util.PictureInPictureAspectRatio;
 import com.coara.browser2.util.PictureInPictureSettings;
@@ -140,6 +141,22 @@ public final class PictureInPictureHost {
             runnable.run();
         } else {
             MAIN.post(runnable);
+        }
+    }
+
+    private static void closePendingClone() {
+        GeckoSession pending = PipSessionHolder.pendingSession;
+        PipSessionHolder.pendingSession = null;
+        if (pending == null) {
+            return;
+        }
+        try {
+            pending.setActive(false);
+        } catch (Throwable ignored) {
+        }
+        try {
+            pending.close();
+        } catch (Throwable ignored) {
         }
     }
 
