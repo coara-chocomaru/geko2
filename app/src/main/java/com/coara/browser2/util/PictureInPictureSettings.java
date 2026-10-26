@@ -69,12 +69,14 @@ public final class PictureInPictureSettings {
         }
         Uri packageUri = Uri.fromParts("package", activity.getPackageName(), null);
         try {
-            activity.startActivity(new Intent(ACTION_PIP_SETTINGS, packageUri));
+            activity.startActivity(new Intent(ACTION_PIP_SETTINGS, packageUri)
+                    .addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION));
             return;
         } catch (ActivityNotFoundException | SecurityException ignored) {
         }
         try {
-            activity.startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri));
+            activity.startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri)
+                    .addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION));
         } catch (ActivityNotFoundException | SecurityException error) {
             Toast.makeText(activity, "Androidのアプリ設定を開けませんでした", Toast.LENGTH_SHORT).show();
         }
