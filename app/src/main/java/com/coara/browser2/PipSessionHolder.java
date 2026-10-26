@@ -13,6 +13,7 @@ import java.lang.ref.WeakReference;
 final class PipSessionHolder {
     static GeckoSession pendingSession;
     static GeckoSession sourceSession;
+    static boolean awaitingClone;
     static WeakReference<Activity> sourceActivity = new WeakReference<>(null);
     static Class<?> sourceActivityClass;
     static WeakReference<BrowserView> sourceView = new WeakReference<>(null);
@@ -25,11 +26,17 @@ final class PipSessionHolder {
     static void setPending(GeckoSession pipSession, GeckoSession originalSession, Activity activity,
                            BrowserView view, Rational ratio) {
         pendingSession = pipSession;
+        awaitingClone = pipSession == null;
         sourceSession = originalSession;
         sourceActivity = new WeakReference<>(activity);
         sourceActivityClass = activity == null ? null : activity.getClass();
         sourceView = new WeakReference<>(view);
         aspectRatio = ratio == null ? PictureInPictureAspectRatio.defaultAspectRatio() : ratio;
+    }
+
+    static void supplyClone(GeckoSession pipSession) {
+        pendingSession = pipSession;
+        awaitingClone = pipSession == null;
     }
 
     static GeckoSession takePendingSession() {
@@ -38,11 +45,18 @@ final class PipSessionHolder {
         return session;
     }
 
+    static void updateAspectRatio(Rational ratio) {
+        if (ratio != null) {
+            aspectRatio = ratio;
+        }
+    }
+
     static void clear(GeckoSession expectedSource) {
         if (expectedSource != null && sourceSession != expectedSource) {
             return;
         }
         pendingSession = null;
+        awaitingClone = false;
         sourceSession = null;
         sourceActivity = new WeakReference<>(null);
         sourceActivityClass = null;

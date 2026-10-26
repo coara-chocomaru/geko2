@@ -678,6 +678,12 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     }
 
     @Override
+    public void startActivityForResult(Intent intent, int requestCode, Bundle options) {
+        PictureInPictureHost.markInternalLaunch(this, intent);
+        super.startActivityForResult(intent, requestCode, options);
+    }
+
+    @Override
     public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode,
                                               android.content.res.Configuration newConfig) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);

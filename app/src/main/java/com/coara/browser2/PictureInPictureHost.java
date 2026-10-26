@@ -1,6 +1,7 @@
 package com.coara.browser2;
 
 import android.app.Activity;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
@@ -27,23 +28,43 @@ public final class PictureInPictureHost {
     private final Runnable requestTimeout = new Runnable() {
         @Override
         public void run() {
-            if (requestPending && !active) {
-                BrowserView view = sourceView.get();
-                GeckoSession session = sourceSession;
-                if (view != null) {
-                    try {
-                        view.rejectPictureInPictureRequest();
-                    } catch (Throwable ignored) {
-                    }
-                }
-                clearState();
-                releaseSource(session, view, true);
+            GeckoSession session = sourceSession;
+            if (session == null) {
+                return;
             }
+            PictureInPictureActivity pipActivity = PipSessionHolder.getActiveActivity();
+            boolean activityAlive = pipActivity != null && !pipActivity.isFinishing();
+            if (active && activityAlive) {
+                return;
+            }
+            BrowserView view = sourceView.get();
+            if (view != null) {
+                try {
+                    view.rejectPictureInPictureRequest();
+                } catch (Throwable ignored) {
+                }
+            }
+            if (activityAlive) {
+                pipActivity.closeForHost(session);
+            }
+            closePendingClone();
+            clearState();
+            releaseSource(session, view, true);
         }
     };
 
     public PictureInPictureHost(Activity activity) {
         this.activity = activity;
+    }
+
+    public static void markInternalLaunch(Activity owner, Intent intent) {
+        if (owner == null || intent == null) {
+            return;
+        }
+        ComponentName component = intent.getComponent();
+        if (component != null && owner.getPackageName().equals(component.getPackageName())) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION);
+        }
     }
 
     public static void onPlaybackStateChanged() {
@@ -147,6 +168,7 @@ public final class PictureInPictureHost {
     private static void closePendingClone() {
         GeckoSession pending = PipSessionHolder.pendingSession;
         PipSessionHolder.pendingSession = null;
+        PipSessionHolder.awaitingClone = false;
         if (pending == null) {
             return;
         }
@@ -160,6 +182,16 @@ public final class PictureInPictureHost {
         }
     }
 
+    private static void closePipActivityFor(GeckoSession session) {
+        if (session == null) {
+            return;
+        }
+        PictureInPictureActivity pipActivity = PipSessionHolder.getActiveActivity();
+        if (pipActivity != null && !pipActivity.isFinishing()) {
+            pipActivity.closeForHost(session);
+        }
+    }
+
     private boolean isSource(BrowserView view) {
         BrowserView source = sourceView.get();
         return source == view || (sourceSession != null && view != null && view.getGeckoSession() == sourceSession);
@@ -169,30 +201,65 @@ public final class PictureInPictureHost {
         return requestPending || active || (sourceSession != null && PipSessionHolder.sourceSession == sourceSession);
     }
 
+    private boolean launchPipActivity() {
+        try {
+            Intent intent = new Intent(activity, PictureInPictureActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                            | Intent.FLAG_ACTIVITY_NO_USER_ACTION
+                            | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            activity.startActivity(intent);
+            return true;
+        } catch (RuntimeException error) {
+            return false;
+        }
+    }
+
+    private void cancelRequest(GeckoSession session, BrowserView view) {
+        closePipActivityFor(session);
+        closePendingClone();
+        clearState();
+        releaseSource(session, view, false);
+    }
+
     public boolean onUserLeaveHint(BrowserView view) {
-        if (view == null || activity.isFinishing() || activity.isDestroyed()
-                || !PictureInPictureSettings.isSystemPipAllowed(activity)
-                || !view.isMediaPlaying() || PictureInPictureAspectRatio.videoState(view) < 0) {
+        if (view == null || activity.isFinishing() || activity.isDestroyed()) {
+            return true;
+        }
+        if (!PictureInPictureSettings.isSystemPipAllowed(activity)) {
+            return false;
+        }
+        if (!view.isMediaPlaying() || PictureInPictureAspectRatio.videoState(view) < 0) {
+            return true;
+        }
+        GeckoSession session = view.getGeckoSession();
+        if (session == null) {
             return false;
         }
         PictureInPictureActivity existing = PipSessionHolder.getActiveActivity();
         if (existing != null && !existing.isFinishing()) {
-            return false;
+            return PipSessionHolder.sourceSession == session;
+        }
+        if ((requestPending || active) && sourceSession == session) {
+            return true;
+        }
+        if (PipSessionHolder.sourceSession != null && PipSessionHolder.sourceSession != session) {
+            return true;
         }
         if (view.isPictureInPictureActiveOrPending()) {
             view.rejectPictureInPictureRequest();
         }
         sourceView = new WeakReference<>(view);
-        sourceSession = view.getGeckoSession();
-        if (sourceSession == null) {
-            clearState();
-            return false;
-        }
+        sourceSession = session;
         requestPending = true;
         active = false;
         current = new WeakReference<>(this);
         MAIN.removeCallbacks(requestTimeout);
         MAIN.postDelayed(requestTimeout, REQUEST_TIMEOUT_MS);
+        PipSessionHolder.setPending(null, session, activity, view, PictureInPictureAspectRatio.getCached(view));
+        if (!launchPipActivity()) {
+            cancelRequest(session, view);
+            return false;
+        }
         boolean accepted = view.requestPictureInPicture(new Runnable() {
             @Override
             public void run() {
@@ -200,7 +267,7 @@ public final class PictureInPictureHost {
             }
         });
         if (!accepted) {
-            clearState();
+            cancelRequest(session, view);
             return false;
         }
         return true;
@@ -215,18 +282,20 @@ public final class PictureInPictureHost {
         if (session == null || view.isDestroyed()) {
             return false;
         }
-        if ((requestPending || active) && sourceSession != null && sourceSession != session) {
-            return false;
-        }
+        boolean awaiting = PipSessionHolder.awaitingClone && PipSessionHolder.sourceSession == session
+                && sourceSession == session;
         PictureInPictureActivity existing = PipSessionHolder.getActiveActivity();
-        if (existing != null && !existing.isFinishing()) {
-            if (PipSessionHolder.sourceSession == session) {
-                return true;
+        boolean existingAlive = existing != null && !existing.isFinishing();
+        if (!awaiting) {
+            if ((requestPending || active) && sourceSession != null && sourceSession != session) {
+                return false;
             }
-            return false;
-        }
-        if (sourceSession != null && sourceSession != session && PipSessionHolder.sourceSession != null) {
-            return false;
+            if (existingAlive) {
+                return PipSessionHolder.sourceSession == session;
+            }
+            if (sourceSession != null && sourceSession != session && PipSessionHolder.sourceSession != null) {
+                return false;
+            }
         }
         sourceSession = session;
         sourceView = new WeakReference<>(view);
@@ -248,9 +317,19 @@ public final class PictureInPictureHost {
             clone.setPriorityHint(GeckoSession.PRIORITY_HIGH);
             view.setPictureInPictureActive(true);
             session.getSessionPictureInPicture().setKeepActive(true);
-            PipSessionHolder.setPending(clone, session, activity, view, PictureInPictureAspectRatio.getCached(view));
-            activity.startActivity(new Intent(activity, PictureInPictureActivity.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            if (awaiting) {
+                PipSessionHolder.updateAspectRatio(PictureInPictureAspectRatio.getCached(view));
+                PipSessionHolder.supplyClone(clone);
+                if (existingAlive) {
+                    existing.onCloneReady();
+                }
+            } else {
+                PipSessionHolder.setPending(clone, session, activity, view, PictureInPictureAspectRatio.getCached(view));
+                if (!launchPipActivity()) {
+                    throw new IllegalStateException("pip activity launch failed");
+                }
+            }
+            MAIN.postDelayed(requestTimeout, REQUEST_TIMEOUT_MS);
             refreshActiveState();
             return true;
         } catch (Throwable error) {
@@ -261,6 +340,8 @@ public final class PictureInPictureHost {
                 } catch (Throwable ignored) {
                 }
             }
+            closePipActivityFor(session);
+            closePendingClone();
             clearState();
             releaseSource(session, view, true);
             return false;
@@ -272,6 +353,8 @@ public final class PictureInPictureHost {
             return;
         }
         GeckoSession session = sourceSession;
+        closePipActivityFor(session);
+        closePendingClone();
         clearState();
         if (view != null) {
             view.setPictureInPictureActive(false);
@@ -295,6 +378,7 @@ public final class PictureInPictureHost {
         if (pipActivity != null && session != null) {
             pipActivity.closeForGecko(session);
         }
+        closePendingClone();
         clearState();
         releaseSource(session, view, false);
     }
@@ -318,6 +402,8 @@ public final class PictureInPictureHost {
                 } catch (Throwable ignored) {
                 }
             }
+            closePipActivityFor(session);
+            closePendingClone();
             clearState();
             releaseSource(session, view, true);
         }
@@ -334,6 +420,7 @@ public final class PictureInPictureHost {
         if (pipActivity != null && session != null) {
             pipActivity.closeForHost(session);
         }
+        closePendingClone();
         clearState();
         releaseSource(session, view, true);
     }

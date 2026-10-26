@@ -25,8 +25,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class PictureInPictureActivity extends AppCompatActivity {
-    private static final long RENDER_TIMEOUT_MS = 7000L;
-    private static final long ENTER_DELAY_MS = 300L;
+    private static final long RENDER_TIMEOUT_MS = 8000L;
+    private static final long ENTER_DELAY_MS = 150L;
     private final Handler main = new Handler(Looper.getMainLooper());
     private GeckoView geckoView;
     private GeckoSession geckoSession;
@@ -69,8 +69,7 @@ public final class PictureInPictureActivity extends AppCompatActivity {
         sourceView = PipSessionHolder.sourceView.get();
         sourceActivity = PipSessionHolder.sourceActivity.get();
         sourceActivityClass = PipSessionHolder.sourceActivityClass;
-        geckoSession = PipSessionHolder.takePendingSession();
-        if (geckoSession == null || sourceSession == null) {
+        if (sourceSession == null) {
             finish();
             return;
         }
@@ -78,6 +77,41 @@ public final class PictureInPictureActivity extends AppCompatActivity {
             sourceSession.getSessionPictureInPicture().setKeepActive(true);
             sourceSession.setActive(true);
             sourceSession.setPriorityHint(GeckoSession.PRIORITY_HIGH);
+        } catch (Throwable error) {
+            finish();
+            return;
+        }
+        main.postDelayed(renderTimeout, RENDER_TIMEOUT_MS);
+        GeckoSession clone = PipSessionHolder.takePendingSession();
+        if (clone != null) {
+            attachClone(clone);
+        }
+    }
+
+    public void onCloneReady() {
+        if (isFinishing() || isDestroyed()) {
+            return;
+        }
+        GeckoSession clone = PipSessionHolder.takePendingSession();
+        if (clone != null) {
+            attachClone(clone);
+        }
+    }
+
+    private void attachClone(GeckoSession clone) {
+        if (clone == null) {
+            return;
+        }
+        if (geckoSession != null || geckoView == null || isFinishing()) {
+            try {
+                clone.setActive(false);
+                clone.close();
+            } catch (Throwable ignored) {
+            }
+            return;
+        }
+        geckoSession = clone;
+        try {
             geckoSession.getSettings().setSuspendMediaWhenInactive(false);
             geckoSession.setActive(true);
             geckoSession.setPriorityHint(GeckoSession.PRIORITY_HIGH);
@@ -103,7 +137,6 @@ public final class PictureInPictureActivity extends AppCompatActivity {
                     }
                 }
             });
-            main.postDelayed(renderTimeout, RENDER_TIMEOUT_MS);
         } catch (Throwable error) {
             finish();
         }
@@ -284,6 +317,7 @@ public final class PictureInPictureActivity extends AppCompatActivity {
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             builder.setAutoEnterEnabled(false);
+            builder.setSeamlessResizeEnabled(false);
         }
         return builder.build();
     }
@@ -335,7 +369,7 @@ public final class PictureInPictureActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
-        main.removeCallbacks(renderTimeout);
+        main.removeCallbacksAndMessages(null);
         if (drawCallback != null && geckoSession != null) {
             try {
                 geckoSession.getCompositorController().removeDrawCallback(drawCallback);
@@ -346,6 +380,14 @@ public final class PictureInPictureActivity extends AppCompatActivity {
         GeckoSession source = sourceSession;
         if (source != null && !closeFromGecko && !closeFromHost) {
             PictureInPictureHost.onPipActivityClosed(source, sourceView);
+        }
+        GeckoSession leftover = PipSessionHolder.takePendingSession();
+        if (leftover != null) {
+            try {
+                leftover.setActive(false);
+                leftover.close();
+            } catch (Throwable ignored) {
+            }
         }
         GeckoSession clone = geckoSession;
         GeckoView view = geckoView;
