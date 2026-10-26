@@ -443,9 +443,14 @@ public final class PictureInPictureHost {
         MAIN.removeCallbacks(compositorKick);
         MAIN.removeCallbacks(probeRunnable);
         BrowserView view = sourceView.get();
-        if (view != null && (inPip || entering)) {
-            notifyCompositor(view, false);
-            PictureInPictureLayout.exit(view);
+        boolean actualPip = false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                actualPip = activity.isInPictureInPictureMode();
+            } catch (RuntimeException ignored) {
+            }
+        }
+        if (view != null && (inPip || entering) && !actualPip) {
             view.setPictureInPictureActive(false);
         }
         entering = false;

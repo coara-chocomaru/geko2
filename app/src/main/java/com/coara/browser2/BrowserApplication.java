@@ -27,6 +27,7 @@ public class BrowserApplication extends Application {
         if (!getPackageName().equals(detectProcessName())) {
             return;
         }
+        MediaPlaybackService.clearLegacyNotification(this);
         installCrashLogger();
         com.coara.browser2.gecko.BrowserEngine.init(this);
         com.coara.browser2.util.CookieSitePolicy.init(this);

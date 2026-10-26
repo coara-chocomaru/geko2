@@ -1010,6 +1010,7 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
                         request.contentDisposition, request.mimeType, request.contentLength, referer,
                         basicAuthEnabled, "Downloading file...");
         if (id > 0) {
+            com.coara.browser2.util.DownloadNotificationPermission.request(SecretActivity.this);
             Toast.makeText(this, "ダウンロードを開始しました", Toast.LENGTH_LONG).show();
         } else {
             Toast.makeText(this, "ダウンロードに失敗しました", Toast.LENGTH_SHORT).show();
@@ -1278,9 +1279,6 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
             @Override
             public void onMediaPlaybackChanged(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession,
                                                boolean playing, boolean stopped, String title, String artist) {
-                if (playing) {
-                    com.coara.browser2.MediaPlaybackService.requestNotificationPermission(SecretActivity.this);
-                }
                 com.coara.browser2.MediaPlaybackService.onPlaybackState(
                         SecretActivity.this, view.getGeckoSession(), mediaSession, playing, stopped,
                         "プライベート再生", "Coara Gecko");

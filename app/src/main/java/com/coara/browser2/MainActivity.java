@@ -2580,9 +2580,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             @Override
             public void onMediaPlaybackChanged(BrowserView view, org.mozilla.geckoview.MediaSession mediaSession,
                                                boolean playing, boolean stopped, String title, String artist) {
-                if (playing) {
-                    com.coara.browser2.MediaPlaybackService.requestNotificationPermission(MainActivity.this);
-                }
                 com.coara.browser2.MediaPlaybackService.onPlaybackState(
                         MainActivity.this, view.getGeckoSession(), mediaSession, playing, stopped, title, artist);
             }
@@ -2862,6 +2859,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
                         request.contentDisposition, request.mimeType, request.contentLength, referer,
                         basicAuthEnabled, "Downloading file...");
         if (id > 0) {
+            com.coara.browser2.util.DownloadNotificationPermission.request(MainActivity.this);
             Toast.makeText(this, "ダウンロードを開始しました", Toast.LENGTH_LONG).show();
         } else {
             Toast.makeText(this, "ダウンロードに失敗しました", Toast.LENGTH_SHORT).show();
