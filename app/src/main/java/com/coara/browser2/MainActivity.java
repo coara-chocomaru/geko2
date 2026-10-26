@@ -1336,6 +1336,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         }
         TouchpadOverlayController.onHostResume(this, pref);
         PictureInPictureSettings.sync(isPictureInPictureEnabled());
+        pipHost.startWatch(this::getCurrentWebView);
     }
 
     @Override
@@ -1362,7 +1363,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             return;
         }
         BrowserView target = fullScreenActive && fullScreenView != null ? fullScreenView : getCurrentWebView();
-        if (target == null || target.isDestroyed() || !target.isMediaPlaying()) {
+        if (target == null || target.isDestroyed()) {
             return;
         }
         if (!PictureInPictureSettings.isSystemPipAllowed(this)) {
@@ -1432,6 +1433,7 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             pauseCurrentWebView();
             pauseAllWebViewTimers();
         }
+        pipHost.stopWatch();
         flushHistory();
         saveTabsState();
         super.onPause();

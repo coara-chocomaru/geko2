@@ -736,6 +736,7 @@ public final class MediaPlaybackService extends Service {
                 session.play();
                 presentState(false);
             } else if (ACTION_PAUSE.equals(action)) {
+                PictureInPictureHost.noteUserPause();
                 playing = false;
                 transientFocusLoss = false;
                 session.pause();

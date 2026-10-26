@@ -11,6 +11,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Rational;
+import android.widget.Toast;
 
 import androidx.lifecycle.Lifecycle;
 import androidx.lifecycle.LifecycleOwner;
@@ -23,13 +24,20 @@ import com.coara.browser2.util.PictureInPictureSettings;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
+import org.json.JSONObject;
+
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 public final class PictureInPictureHost {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final long DISMISS_CHECK_DELAY_MS = 350L;
     private static final long ENTER_TIMEOUT_MS = 2500L;
     private static final long COMPOSITOR_KICK_DELAY_MS = 400L;
+    private static final long WATCH_INTERVAL_MS = 3000L;
+    private static final long FIRST_PROBE_DELAY_MS = 1500L;
+    private static final long PROBE_INTERVAL_MS = 1200L;
+    private static final int MAX_PROBES = 4;
     private static WeakReference<PictureInPictureHost> current = new WeakReference<>(null);
 
     private final Activity activity;
@@ -38,6 +46,31 @@ public final class PictureInPictureHost {
     private boolean entering;
     private boolean inPip;
     private boolean chromeApplied;
+    private boolean userPaused;
+    private boolean watching;
+    private Supplier<BrowserView> watchTarget;
+    private int probeRound;
+    private double lastProbeTime = Double.NaN;
+    private final Runnable watchTick = new Runnable() {
+        @Override
+        public void run() {
+            if (!watching) {
+                return;
+            }
+            BrowserView view = watchTarget == null ? null : watchTarget.get();
+            if (view != null && !view.isDestroyed() && !inPip && !entering
+                    && PictureInPictureSettings.isCachedEnabled()) {
+                PictureInPictureAspectRatio.query(view, false, null);
+            }
+            MAIN.postDelayed(this, WATCH_INTERVAL_MS);
+        }
+    };
+    private final Runnable probeRunnable = new Runnable() {
+        @Override
+        public void run() {
+            runProbe();
+        }
+    };
     private final Runnable dismissCheck = new Runnable() {
         @Override
         public void run() {
@@ -80,6 +113,33 @@ public final class PictureInPictureHost {
         if (component != null && owner.getPackageName().equals(component.getPackageName())) {
             intent.addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION);
         }
+    }
+
+    public static void noteUserPause() {
+        MAIN.post(new Runnable() {
+            @Override
+            public void run() {
+                PictureInPictureHost host = current.get();
+                if (host != null) {
+                    host.userPaused = true;
+                }
+            }
+        });
+    }
+
+    public void startWatch(Supplier<BrowserView> target) {
+        watchTarget = target;
+        if (watching) {
+            return;
+        }
+        watching = true;
+        MAIN.removeCallbacks(watchTick);
+        MAIN.postDelayed(watchTick, WATCH_INTERVAL_MS);
+    }
+
+    public void stopWatch() {
+        watching = false;
+        MAIN.removeCallbacks(watchTick);
     }
 
     public static void onPlaybackStateChanged() {
@@ -162,7 +222,14 @@ public final class PictureInPictureHost {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || !PictureInPictureSettings.isSystemPipAllowed(activity)) {
             return false;
         }
-        if (!view.isMediaPlaying() || PictureInPictureAspectRatio.videoState(view) < 0) {
+        boolean mediaPlaying = view.isMediaPlaying();
+        boolean videoPlaying = PictureInPictureAspectRatio.isVideoPlaying(view);
+        if (!mediaPlaying && !videoPlaying) {
+            return true;
+        }
+        if (!videoPlaying && PictureInPictureAspectRatio.videoState(view) < 0) {
+            Toast.makeText(activity.getApplicationContext(), "動画を検出できないため小窓を表示しません",
+                    Toast.LENGTH_SHORT).show();
             return true;
         }
         return enter(view);
@@ -185,6 +252,7 @@ public final class PictureInPictureHost {
         sourceView = new WeakReference<>(view);
         current = new WeakReference<>(this);
         entering = true;
+        userPaused = false;
         view.setPictureInPictureActive(true);
         PictureInPictureLayout.enter(view);
         boolean accepted;
@@ -237,6 +305,10 @@ public final class PictureInPictureHost {
             refreshParams();
             MAIN.removeCallbacks(compositorKick);
             MAIN.postDelayed(compositorKick, COMPOSITOR_KICK_DELAY_MS);
+            probeRound = 0;
+            lastProbeTime = Double.NaN;
+            MAIN.removeCallbacks(probeRunnable);
+            MAIN.postDelayed(probeRunnable, FIRST_PROBE_DELAY_MS);
             return;
         }
         if (!inPip && !entering) {
@@ -246,6 +318,7 @@ public final class PictureInPictureHost {
         inPip = false;
         setChrome(false);
         MAIN.removeCallbacks(compositorKick);
+        MAIN.removeCallbacks(probeRunnable);
         BrowserView view = sourceView.get();
         if (view != null) {
             notifyCompositor(view, false);
@@ -253,6 +326,66 @@ public final class PictureInPictureHost {
         }
         MAIN.removeCallbacks(dismissCheck);
         MAIN.postDelayed(dismissCheck, DISMISS_CHECK_DELAY_MS);
+    }
+
+    private void runProbe() {
+        if (!inPip) {
+            return;
+        }
+        final BrowserView view = sourceView.get();
+        if (view == null || view.isDestroyed()) {
+            return;
+        }
+        PictureInPictureLayout.probe(view, value -> MAIN.post(new Runnable() {
+            @Override
+            public void run() {
+                onProbe(view, value);
+            }
+        }));
+    }
+
+    private void onProbe(BrowserView view, String value) {
+        if (!inPip || view.isDestroyed()) {
+            return;
+        }
+        JSONObject result = null;
+        try {
+            result = new JSONObject(value);
+        } catch (Throwable ignored) {
+        }
+        probeRound++;
+        if (result != null && !result.optBoolean("nv", false) && !result.has("err")) {
+            boolean paused = result.optBoolean("p", false);
+            boolean ended = result.optBoolean("e", false);
+            int readyState = result.optInt("rs", 0);
+            double time = result.optDouble("t", Double.NaN);
+            if (!ended) {
+                if (paused && !userPaused) {
+                    keepSessionActive(view);
+                    notifyCompositor(view, true);
+                    PictureInPictureLayout.resume(view);
+                    report("再開", result);
+                } else if (!paused && readyState >= 3 && !Double.isNaN(lastProbeTime)
+                        && !Double.isNaN(time) && Math.abs(time - lastProbeTime) < 0.15d && !userPaused) {
+                    keepSessionActive(view);
+                    notifyCompositor(view, false);
+                    notifyCompositor(view, true);
+                    report("描画停止", result);
+                }
+            }
+            lastProbeTime = time;
+        }
+        if (probeRound < MAX_PROBES) {
+            MAIN.removeCallbacks(probeRunnable);
+            MAIN.postDelayed(probeRunnable, PROBE_INTERVAL_MS);
+        }
+    }
+
+    private void report(String label, JSONObject result) {
+        Toast.makeText(activity.getApplicationContext(),
+                "PiP補正:" + label + " vis=" + result.optString("vis") + " p=" + result.optBoolean("p")
+                        + " rs=" + result.optInt("rs") + " t=" + result.optDouble("t"),
+                Toast.LENGTH_LONG).show();
     }
 
     private static void keepSessionActive(BrowserView view) {
@@ -323,6 +456,8 @@ public final class PictureInPictureHost {
         MAIN.removeCallbacks(enterTimeout);
         MAIN.removeCallbacks(dismissCheck);
         MAIN.removeCallbacks(compositorKick);
+        MAIN.removeCallbacks(probeRunnable);
+        stopWatch();
         BrowserView view = sourceView.get();
         if (view != null && (inPip || entering)) {
             notifyCompositor(view, false);
