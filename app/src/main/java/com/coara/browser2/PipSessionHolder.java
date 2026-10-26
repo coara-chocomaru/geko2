@@ -34,12 +34,19 @@ final class PipSessionHolder {
         aspectRatio = ratio == null ? PictureInPictureAspectRatio.defaultAspectRatio() : ratio;
     }
 
-    static void supplyClone(GeckoSession pipSession) {
+    static boolean supplyClone(GeckoSession expectedSource, GeckoSession pipSession) {
+        if (expectedSource == null || sourceSession != expectedSource || pipSession == null) {
+            return false;
+        }
         pendingSession = pipSession;
-        awaitingClone = pipSession == null;
+        awaitingClone = false;
+        return true;
     }
 
-    static GeckoSession takePendingSession() {
+    static GeckoSession takePendingSession(GeckoSession expectedSource) {
+        if (expectedSource == null || sourceSession != expectedSource) {
+            return null;
+        }
         GeckoSession session = pendingSession;
         pendingSession = null;
         return session;

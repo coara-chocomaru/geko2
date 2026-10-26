@@ -25,7 +25,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class PictureInPictureActivity extends AppCompatActivity {
-    private static final long RENDER_TIMEOUT_MS = 8000L;
     private static final long ENTER_DELAY_MS = 150L;
     private final Handler main = new Handler(Looper.getMainLooper());
     private GeckoView geckoView;
@@ -40,16 +39,6 @@ public final class PictureInPictureActivity extends AppCompatActivity {
     private boolean pipExitPending;
     private boolean closeFromGecko;
     private boolean closeFromHost;
-    private int drawCount;
-    private Runnable drawCallback;
-    private final Runnable renderTimeout = new Runnable() {
-        @Override
-        public void run() {
-            if (!enteredPip && !isFinishing()) {
-                finish();
-            }
-        }
-    };
     private final Runnable pipExitCheck = new Runnable() {
         @Override
         public void run() {
@@ -93,8 +82,7 @@ public final class PictureInPictureActivity extends AppCompatActivity {
             finish();
             return;
         }
-        main.postDelayed(renderTimeout, RENDER_TIMEOUT_MS);
-        GeckoSession clone = PipSessionHolder.takePendingSession();
+        GeckoSession clone = PipSessionHolder.takePendingSession(sourceSession);
         if (clone != null) {
             attachClone(clone);
         }
@@ -104,7 +92,7 @@ public final class PictureInPictureActivity extends AppCompatActivity {
         if (isFinishing() || isDestroyed()) {
             return;
         }
-        GeckoSession clone = PipSessionHolder.takePendingSession();
+        GeckoSession clone = PipSessionHolder.takePendingSession(sourceSession);
         if (clone != null) {
             attachClone(clone);
         }
@@ -125,19 +113,24 @@ public final class PictureInPictureActivity extends AppCompatActivity {
         geckoSession = clone;
         try {
             geckoSession.getSettings().setSuspendMediaWhenInactive(false);
+            geckoSession.getSessionPictureInPicture().setKeepActive(true);
             geckoSession.setActive(true);
             geckoSession.setPriorityHint(GeckoSession.PRIORITY_HIGH);
             geckoSession.getCompositorController().setClearColor(Color.BLACK);
-            registerDrawCallback();
             geckoView.setSession(geckoSession);
             geckoView.post(new Runnable() {
                 @Override
                 public void run() {
-                    if (geckoView != null && geckoView.isAttachedToWindow()) {
-                        geckoView.requestLayout();
-                        geckoView.invalidate();
-                        checkRenderReady();
+                    if (geckoSession != clone || geckoView == null || isFinishing()) {
+                        return;
                     }
+                    if (!geckoView.isAttachedToWindow()) {
+                        main.postDelayed(this, 50L);
+                        return;
+                    }
+                    geckoView.requestLayout();
+                    geckoView.invalidate();
+                    checkRenderReady();
                 }
             });
         } catch (Throwable error) {
@@ -145,41 +138,20 @@ public final class PictureInPictureActivity extends AppCompatActivity {
         }
     }
 
-    private void registerDrawCallback() {
-        final GeckoSession session = geckoSession;
-        if (session == null) {
+    private void checkRenderReady() {
+        if (renderReady || isFinishing() || geckoSession == null || geckoView == null) {
             return;
         }
-        drawCount = 0;
-        Runnable callback = new Runnable() {
-            @Override
-            public void run() {
-                if (geckoSession != session || isFinishing() || enteredPip) {
-                    return;
+        if (!geckoView.isAttachedToWindow()) {
+            geckoView.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    checkRenderReady();
                 }
-                drawCount++;
-                checkRenderReady();
-            }
-        };
-        drawCallback = callback;
-        try {
-            session.getCompositorController().addDrawCallback(callback);
-        } catch (Throwable ignored) {
-        }
-    }
-
-    private void checkRenderReady() {
-        if (renderReady || isFinishing() || drawCount < 1) {
+            }, 50L);
             return;
         }
         renderReady = true;
-        if (drawCallback != null && geckoSession != null) {
-            try {
-                geckoSession.getCompositorController().removeDrawCallback(drawCallback);
-            } catch (Throwable ignored) {
-            }
-            drawCallback = null;
-        }
         if (resumed) {
             main.postDelayed(new Runnable() {
                 @Override
@@ -208,7 +180,6 @@ public final class PictureInPictureActivity extends AppCompatActivity {
         if (!resumed || !renderReady || enteredPip || isFinishing()) {
             return;
         }
-        main.removeCallbacks(renderTimeout);
         enteredPip = true;
         try {
             if (!enterPictureInPictureMode(buildPipParams())) {
@@ -244,7 +215,6 @@ public final class PictureInPictureActivity extends AppCompatActivity {
         if (!enteredPip) {
             return;
         }
-        main.removeCallbacks(renderTimeout);
         pipExitPending = true;
         main.removeCallbacks(pipExitCheck);
         main.postDelayed(pipExitCheck, 180L);
@@ -373,18 +343,11 @@ public final class PictureInPictureActivity extends AppCompatActivity {
     protected void onDestroy() {
         main.removeCallbacksAndMessages(null);
         pipExitPending = false;
-        if (drawCallback != null && geckoSession != null) {
-            try {
-                geckoSession.getCompositorController().removeDrawCallback(drawCallback);
-            } catch (Throwable ignored) {
-            }
-            drawCallback = null;
-        }
         GeckoSession source = sourceSession;
         if (source != null && !closeFromGecko && !closeFromHost) {
             PictureInPictureHost.onPipActivityClosed(source, sourceView);
         }
-        GeckoSession leftover = PipSessionHolder.takePendingSession();
+        GeckoSession leftover = source != null ? PipSessionHolder.takePendingSession(source) : null;
         if (leftover != null) {
             try {
                 leftover.setActive(false);

@@ -17,7 +17,7 @@ import java.lang.ref.WeakReference;
 
 public final class PictureInPictureHost {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    private static final long REQUEST_TIMEOUT_MS = 6500L;
+    private static final long REQUEST_TIMEOUT_MS = 12000L;
     private static WeakReference<PictureInPictureHost> current = new WeakReference<>(null);
 
     private final Activity activity;
@@ -327,7 +327,9 @@ public final class PictureInPictureHost {
             session.getSessionPictureInPicture().setKeepActive(true);
             if (awaiting) {
                 PipSessionHolder.updateAspectRatio(PictureInPictureAspectRatio.getCached(view));
-                PipSessionHolder.supplyClone(clone);
+                if (!PipSessionHolder.supplyClone(session, clone)) {
+                    throw new IllegalStateException("stale picture-in-picture request");
+                }
                 if (existingAlive) {
                     existing.onCloneReady();
                 }
