@@ -1,6 +1,7 @@
 package com.coara.browser2.util;
 
 import com.coara.browser2.gecko.BrowserView;
+import com.coara.browser2.gecko.ValueCallback;
 
 public final class PictureInPictureLayout {
     private static final String ENTER_SCRIPT = "(function(){try{"
@@ -37,14 +38,32 @@ public final class PictureInPictureLayout {
             + "var t=best||blind;if(!t)return false;"
             + "for(var k=0;k<t.p.length;k++){climb(t.p[k])}"
             + "climb(t.el);"
-            + "window.__coaraPip={on:true,els:els,styles:styles};return true"
+            + "var vid=t.el.tagName==='VIDEO'?t.el:null,vo=false;"
+            + "try{var dw=document.wrappedJSObject;if(dw&&typeof exportFunction==='function'){"
+            + "Object.defineProperty(dw,'hidden',{configurable:true,get:exportFunction(function(){return false},window)});"
+            + "Object.defineProperty(dw,'visibilityState',{configurable:true,get:exportFunction(function(){return 'visible'},window)});"
+            + "vo=true}}catch(e){}"
+            + "window.__coaraPip={on:true,els:els,styles:styles,video:vid,vo:vo};return true"
             + "}catch(e){return false}})()";
 
     private static final String EXIT_SCRIPT = "(function(){try{"
             + "var S=window.__coaraPip;if(!S)return true;"
             + "S.els.forEach(function(p){try{p[0].classList.remove(p[1])}catch(e){}});"
             + "S.styles.forEach(function(s){try{s.remove()}catch(e){}});"
+            + "if(S.vo){try{var dw=document.wrappedJSObject;delete dw.hidden;delete dw.visibilityState}catch(e){}}"
             + "window.__coaraPip=null;return true"
+            + "}catch(e){return false}})()";
+
+    private static final String PROBE_SCRIPT = "(function(){try{"
+            + "var S=window.__coaraPip;var v=S&&S.video;"
+            + "var r={vis:document.visibilityState,hid:document.hidden};"
+            + "if(v){r.p=!!v.paused;r.e=!!v.ended;r.rs=v.readyState;r.t=v.currentTime;r.f=!!document.fullscreenElement}"
+            + "else{r.nv=true}return r"
+            + "}catch(e){return {err:String(e)}}})()";
+
+    private static final String RESUME_SCRIPT = "(function(){try{"
+            + "var S=window.__coaraPip;if(!S||!S.video)return false;"
+            + "var p=S.video.play();if(p&&p.catch){p.catch(function(){})}return true"
             + "}catch(e){return false}})()";
 
     private PictureInPictureLayout() {
@@ -56,6 +75,22 @@ public final class PictureInPictureLayout {
 
     public static void exit(BrowserView view) {
         run(view, EXIT_SCRIPT);
+    }
+
+    public static void resume(BrowserView view) {
+        run(view, RESUME_SCRIPT);
+    }
+
+    public static void probe(BrowserView view, ValueCallback<String> callback) {
+        if (view == null || view.isDestroyed()) {
+            callback.onReceiveValue("null");
+            return;
+        }
+        try {
+            view.evaluateJavascript(PROBE_SCRIPT, callback);
+        } catch (Throwable error) {
+            callback.onReceiveValue("null");
+        }
     }
 
     private static void run(BrowserView view, String script) {

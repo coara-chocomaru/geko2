@@ -25,9 +25,10 @@ public final class PictureInPictureAspectRatio {
     private static final Map<BrowserView, Long> LAST_QUERY = new WeakHashMap<>();
     private static final Map<BrowserView, PendingQuery> PENDING = new WeakHashMap<>();
     private static final Map<BrowserView, Integer> FOUND = new WeakHashMap<>();
+    private static final Map<BrowserView, Boolean> PLAYING = new WeakHashMap<>();
     private static long nextGeneration;
 
-    private static final String QUERY_SCRIPT = "(function(){try{var best=null,visited=[],blind=false;function consider(w,h,score){w=Math.round(Number(w)||0);h=Math.round(Number(h)||0);if(w>0&&h>0&&(!best||score>best.score))best={w:w,h:h,score:score};}function scan(d,depth){if(!d||depth>5||visited.indexOf(d)>=0)return;visited.push(d);var docStrong=false;var fs=null;try{fs=d.fullscreenElement||d.webkitFullscreenElement||null}catch(e){}var vids=[];try{vids=d.querySelectorAll('video')}catch(e){}for(var i=0;i<vids.length;i++){var v=vids[i],r=null,st=null;try{r=v.getBoundingClientRect();st=d.defaultView.getComputedStyle(v)}catch(e){}var playing=false,ready=false,full=false,pip=false,visible=false;try{playing=!v.paused&&!v.ended;ready=v.readyState>=2;full=fs===v||!!(fs&&fs.contains&&fs.contains(v));pip=d.pictureInPictureElement===v||v.webkitPresentationMode==='picture-in-picture';visible=!!r&&r.width>0&&r.height>0&&(!st||(st.display!=='none'&&st.visibility!=='hidden'&&Number(st.opacity)!==0))}catch(e){}if(!visible&&!playing&&!full&&!pip)continue;if(playing||full||pip)docStrong=true;var w=Number(v.videoWidth)||0,h=Number(v.videoHeight)||0;if((w<=0||h<=0)&&r){w=r.width;h=r.height}var area=r?Math.min(100000000,r.width*r.height):0;var score=(pip?1000000000000000:0)+(full?1000000000000:0)+(playing?1000000000:0)+(ready?10000000:0)+(visible?1000000:0)+area;consider(w,h,score)}var frames=[];try{frames=d.querySelectorAll('iframe,frame')}catch(e){}for(var j=0;j<frames.length;j++){var f=frames[j],fr=null,ffd=null,fullFrame=false;try{fr=f.getBoundingClientRect();fullFrame=fs===f||!!(fs&&fs.contains&&fs.contains(f));ffd=f.contentDocument}catch(e){}if(fullFrame&&fr&&fr.width>0&&fr.height>0)consider(fr.width,fr.height,1500000000);if(ffd){try{scan(ffd,depth+1)}catch(e){}}else if(fr&&fr.width>=160&&fr.height>=90){blind=true}}if(depth<3&&!docStrong){var all=[];try{all=d.querySelectorAll('*')}catch(e){}for(var k=0;k<all.length;k++){try{if(all[k].shadowRoot)scan(all[k].shadowRoot,depth+1)}catch(e){}}}}scan(document,0);return best?{w:best.w,h:best.h,found:true}:{found:false,blind:blind}}catch(e){return {found:false,blind:true}}})()";
+    private static final String QUERY_SCRIPT = "(function(){try{var best=null,visited=[],blind=false,anyPlaying=false;function consider(w,h,score){w=Math.round(Number(w)||0);h=Math.round(Number(h)||0);if(w>0&&h>0&&(!best||score>best.score))best={w:w,h:h,score:score};}function scan(d,depth){if(!d||depth>5||visited.indexOf(d)>=0)return;visited.push(d);var docStrong=false;var fs=null;try{fs=d.fullscreenElement||d.webkitFullscreenElement||null}catch(e){}var vids=[];try{vids=d.querySelectorAll('video')}catch(e){}for(var i=0;i<vids.length;i++){var v=vids[i],r=null,st=null;try{r=v.getBoundingClientRect();st=d.defaultView.getComputedStyle(v)}catch(e){}var playing=false,ready=false,full=false,pip=false,visible=false;try{playing=!v.paused&&!v.ended;ready=v.readyState>=2;full=fs===v||!!(fs&&fs.contains&&fs.contains(v));pip=d.pictureInPictureElement===v||v.webkitPresentationMode==='picture-in-picture';visible=!!r&&r.width>0&&r.height>0&&(!st||(st.display!=='none'&&st.visibility!=='hidden'&&Number(st.opacity)!==0))}catch(e){}if(playing)anyPlaying=true;if(!visible&&!playing&&!full&&!pip)continue;if(playing||full||pip)docStrong=true;var w=Number(v.videoWidth)||0,h=Number(v.videoHeight)||0;if((w<=0||h<=0)&&r){w=r.width;h=r.height}var area=r?Math.min(100000000,r.width*r.height):0;var score=(pip?1000000000000000:0)+(full?1000000000000:0)+(playing?1000000000:0)+(ready?10000000:0)+(visible?1000000:0)+area;consider(w,h,score)}var frames=[];try{frames=d.querySelectorAll('iframe,frame')}catch(e){}for(var j=0;j<frames.length;j++){var f=frames[j],fr=null,ffd=null,fullFrame=false;try{fr=f.getBoundingClientRect();fullFrame=fs===f||!!(fs&&fs.contains&&fs.contains(f));ffd=f.contentDocument}catch(e){}if(fullFrame&&fr&&fr.width>0&&fr.height>0)consider(fr.width,fr.height,1500000000);if(ffd){try{scan(ffd,depth+1)}catch(e){}}else if(fr&&fr.width>=160&&fr.height>=90){blind=true}}if(depth<3&&!docStrong){var all=[];try{all=d.querySelectorAll('*')}catch(e){}for(var k=0;k<all.length;k++){try{if(all[k].shadowRoot)scan(all[k].shadowRoot,depth+1)}catch(e){}}}}scan(document,0);return best?{w:best.w,h:best.h,found:true,playing:anyPlaying}:{found:false,blind:blind,playing:anyPlaying}}catch(e){return {found:false,blind:true,playing:false}}})()";
 
     private static final class PendingQuery {
         final long generation;
@@ -62,6 +63,17 @@ public final class PictureInPictureAspectRatio {
         }
         synchronized (LOCK) {
             FOUND.remove(view);
+            PLAYING.remove(view);
+        }
+    }
+
+    public static boolean isVideoPlaying(BrowserView view) {
+        if (view == null) {
+            return false;
+        }
+        synchronized (LOCK) {
+            Boolean playing = PLAYING.get(view);
+            return playing != null && playing;
         }
     }
 
@@ -113,6 +125,7 @@ public final class PictureInPictureAspectRatio {
                 if (state != null) {
                     synchronized (LOCK) {
                         FOUND.put(view, state);
+                        PLAYING.put(view, parsePlaying(value));
                     }
                 }
                 complete(view, request.generation, ratio);
@@ -134,6 +147,14 @@ public final class PictureInPictureAspectRatio {
             return object.optBoolean("blind", false) ? 0 : -1;
         } catch (Throwable ignored) {
             return null;
+        }
+    }
+
+    private static boolean parsePlaying(String value) {
+        try {
+            return new JSONObject(value).optBoolean("playing", false);
+        } catch (Throwable ignored) {
+            return false;
         }
     }
 
