@@ -146,7 +146,8 @@
             android:supportsPictureInPicture="true"
             android:excludeFromRecents="true"
             android:taskAffinity="${applicationId}.PictureInPicture"
-            android:theme="@style/Theme.MaterialComponents.Light.NoActionBar" />
+            android:autoRemoveFromRecents="true"
+            android:theme="@style/Theme.CoaraBrowser.Pip" />
 
         <activity
             android:name=".MainActivity"
