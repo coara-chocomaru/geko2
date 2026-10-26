@@ -25,7 +25,6 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_SET_ORIGIN" />
     <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_QUERY_CANDIDATE_CREDENTIALS" />
@@ -197,8 +196,7 @@
         <service
             android:name=".MediaPlaybackService"
             android:exported="false"
-            android:stopWithTask="false"
-            android:foregroundServiceType="mediaPlayback" />
+            android:stopWithTask="false" />
 
         <activity
             android:name=".CustomTabActivity"
