@@ -1336,7 +1336,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         }
         TouchpadOverlayController.onHostResume(this, pref);
         PictureInPictureSettings.sync(isPictureInPictureEnabled());
-        pipHost.startWatch(this::getCurrentWebView);
     }
 
     @Override
@@ -1433,7 +1432,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             pauseCurrentWebView();
             pauseAllWebViewTimers();
         }
-        pipHost.stopWatch();
         flushHistory();
         saveTabsState();
         super.onPause();

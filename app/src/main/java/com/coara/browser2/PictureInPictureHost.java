@@ -27,14 +27,12 @@ import java.util.List;
 import org.json.JSONObject;
 
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 
 public final class PictureInPictureHost {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final long DISMISS_CHECK_DELAY_MS = 350L;
     private static final long ENTER_TIMEOUT_MS = 2500L;
     private static final long COMPOSITOR_KICK_DELAY_MS = 400L;
-    private static final long WATCH_INTERVAL_MS = 3000L;
     private static final long FIRST_PROBE_DELAY_MS = 1500L;
     private static final long PROBE_INTERVAL_MS = 1200L;
     private static final int MAX_PROBES = 4;
@@ -47,24 +45,10 @@ public final class PictureInPictureHost {
     private boolean inPip;
     private boolean chromeApplied;
     private boolean userPaused;
-    private boolean watching;
-    private Supplier<BrowserView> watchTarget;
+    private boolean pipDesktopModeApplied;
+    private boolean pipMediaEnded;
     private int probeRound;
     private double lastProbeTime = Double.NaN;
-    private final Runnable watchTick = new Runnable() {
-        @Override
-        public void run() {
-            if (!watching) {
-                return;
-            }
-            BrowserView view = watchTarget == null ? null : watchTarget.get();
-            if (view != null && !view.isDestroyed() && !inPip && !entering
-                    && PictureInPictureSettings.isCachedEnabled()) {
-                PictureInPictureAspectRatio.query(view, false, null);
-            }
-            MAIN.postDelayed(this, WATCH_INTERVAL_MS);
-        }
-    };
     private final Runnable probeRunnable = new Runnable() {
         @Override
         public void run() {
@@ -127,19 +111,79 @@ public final class PictureInPictureHost {
         });
     }
 
-    public void startWatch(Supplier<BrowserView> target) {
-        watchTarget = target;
-        if (watching) {
-            return;
-        }
-        watching = true;
-        MAIN.removeCallbacks(watchTick);
-        MAIN.postDelayed(watchTick, WATCH_INTERVAL_MS);
+    public static void noteUserPlay() {
+        MAIN.post(new Runnable() {
+            @Override
+            public void run() {
+                PictureInPictureHost host = current.get();
+                if (host != null) {
+                    host.userPaused = false;
+                }
+            }
+        });
     }
 
-    public void stopWatch() {
-        watching = false;
-        MAIN.removeCallbacks(watchTick);
+    public static boolean isPipShowing() {
+        PictureInPictureHost host = current.get();
+        return host != null && host.inPip;
+    }
+
+    public static void notePipMediaEnded() {
+        MAIN.post(new Runnable() {
+            @Override
+            public void run() {
+                PictureInPictureHost host = current.get();
+                if (host != null && (host.inPip || host.entering)) {
+                    host.pipMediaEnded = true;
+                }
+            }
+        });
+    }
+
+    public static void playPipMediaIfEnded(final Runnable playAction) {
+        MAIN.post(new Runnable() {
+            @Override
+            public void run() {
+                PictureInPictureHost host = current.get();
+                BrowserView view = host == null ? null : host.sourceView.get();
+                if (host == null || !host.inPip || !host.pipMediaEnded || view == null || view.isDestroyed()) {
+                    runSeekFallback(playAction);
+                    return;
+                }
+                host.pipMediaEnded = false;
+                PictureInPictureLayout.restartPosition(view, value -> runSeekFallback(playAction));
+            }
+        });
+    }
+
+    public static void seekPipMedia(final int seconds, final Runnable fallback) {
+        MAIN.post(new Runnable() {
+            @Override
+            public void run() {
+                PictureInPictureHost host = current.get();
+                BrowserView view = host == null ? null : host.sourceView.get();
+                if (host == null || !host.inPip || view == null || view.isDestroyed()) {
+                    runSeekFallback(fallback);
+                    return;
+                }
+                host.pipMediaEnded = false;
+                PictureInPictureLayout.seekBy(view, seconds, value -> {
+                    if (!"true".equals(value)) {
+                        runSeekFallback(fallback);
+                    }
+                });
+            }
+        });
+    }
+
+    private static void runSeekFallback(Runnable fallback) {
+        if (fallback == null) {
+            return;
+        }
+        try {
+            fallback.run();
+        } catch (RuntimeException ignored) {
+        }
     }
 
     public static void onPlaybackStateChanged() {
@@ -253,8 +297,12 @@ public final class PictureInPictureHost {
         current = new WeakReference<>(this);
         entering = true;
         userPaused = false;
+        pipMediaEnded = false;
         view.setPictureInPictureActive(true);
+        keepSessionActive(view);
+        applyPipDesktopMode(view);
         PictureInPictureLayout.enter(view);
+        PictureInPictureAspectRatio.query(view, true, ratio -> refreshParams());
         boolean accepted;
         try {
             accepted = activity.enterPictureInPictureMode(buildParams(view));
@@ -279,6 +327,7 @@ public final class PictureInPictureHost {
         if (view != null) {
             notifyCompositor(view, false);
             PictureInPictureLayout.exit(view);
+            restorePipDesktopMode(view);
             view.setPictureInPictureActive(false);
         }
         sourceView = new WeakReference<>(null);
@@ -300,6 +349,8 @@ public final class PictureInPictureHost {
             current = new WeakReference<>(this);
             setChrome(true);
             view.setPictureInPictureActive(true);
+            keepSessionActive(view);
+            applyPipDesktopMode(view);
             PictureInPictureLayout.enter(view);
             notifyCompositor(view, true);
             refreshParams();
@@ -316,6 +367,7 @@ public final class PictureInPictureHost {
         }
         entering = false;
         inPip = false;
+        pipMediaEnded = false;
         setChrome(false);
         MAIN.removeCallbacks(compositorKick);
         MAIN.removeCallbacks(probeRunnable);
@@ -323,6 +375,7 @@ public final class PictureInPictureHost {
         if (view != null) {
             notifyCompositor(view, false);
             PictureInPictureLayout.exit(view);
+            restorePipDesktopMode(view);
         }
         MAIN.removeCallbacks(dismissCheck);
         MAIN.postDelayed(dismissCheck, DISMISS_CHECK_DELAY_MS);
@@ -357,6 +410,7 @@ public final class PictureInPictureHost {
         if (result != null && !result.optBoolean("nv", false) && !result.has("err")) {
             boolean paused = result.optBoolean("p", false);
             boolean ended = result.optBoolean("e", false);
+            pipMediaEnded = pipMediaEnded || ended;
             int readyState = result.optInt("rs", 0);
             double time = result.optDouble("t", Double.NaN);
             if (!ended) {
@@ -364,13 +418,11 @@ public final class PictureInPictureHost {
                     keepSessionActive(view);
                     notifyCompositor(view, true);
                     PictureInPictureLayout.resume(view);
-                    report("再開", result);
                 } else if (!paused && readyState >= 3 && !Double.isNaN(lastProbeTime)
                         && !Double.isNaN(time) && Math.abs(time - lastProbeTime) < 0.15d && !userPaused) {
                     keepSessionActive(view);
                     notifyCompositor(view, false);
                     notifyCompositor(view, true);
-                    report("描画停止", result);
                 }
             }
             lastProbeTime = time;
@@ -381,11 +433,32 @@ public final class PictureInPictureHost {
         }
     }
 
-    private void report(String label, JSONObject result) {
-        Toast.makeText(activity.getApplicationContext(),
-                "PiP補正:" + label + " vis=" + result.optString("vis") + " p=" + result.optBoolean("p")
-                        + " rs=" + result.optInt("rs") + " t=" + result.optDouble("t"),
-                Toast.LENGTH_LONG).show();
+    private void applyPipDesktopMode(BrowserView view) {
+        if (pipDesktopModeApplied || view == null || view.isDestroyed()) {
+            return;
+        }
+        try {
+            com.coara.browser2.gecko.BrowserSettings settings = view.getSettings();
+            if (!settings.isDesktopMode() && settings.getUserAgentOverride() == null) {
+                settings.setDesktopMode(true);
+                pipDesktopModeApplied = true;
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void restorePipDesktopMode(BrowserView view) {
+        if (!pipDesktopModeApplied) {
+            return;
+        }
+        pipDesktopModeApplied = false;
+        if (view == null || view.isDestroyed()) {
+            return;
+        }
+        try {
+            view.getSettings().setDesktopMode(false);
+        } catch (Throwable ignored) {
+        }
     }
 
     private static void keepSessionActive(BrowserView view) {
@@ -457,11 +530,11 @@ public final class PictureInPictureHost {
         MAIN.removeCallbacks(dismissCheck);
         MAIN.removeCallbacks(compositorKick);
         MAIN.removeCallbacks(probeRunnable);
-        stopWatch();
         BrowserView view = sourceView.get();
         if (view != null && (inPip || entering)) {
             notifyCompositor(view, false);
             PictureInPictureLayout.exit(view);
+            restorePipDesktopMode(view);
             view.setPictureInPictureActive(false);
         }
         entering = false;
@@ -517,7 +590,7 @@ public final class PictureInPictureHost {
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             builder.setAutoEnterEnabled(false);
-            builder.setSeamlessResizeEnabled(false);
+            builder.setSeamlessResizeEnabled(true);
         }
         return builder.build();
     }

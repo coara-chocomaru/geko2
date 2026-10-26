@@ -635,7 +635,6 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         }
         TouchpadOverlayController.onHostResume(this, pref);
         PictureInPictureSettings.sync(pref != null && pref.getBoolean("picture_in_picture_enabled", false));
-        pipHost.startWatch(this::getCurrentWebView);
         invalidateOptionsMenu();
     }
 
@@ -729,7 +728,6 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         com.coara.browser2.fx.FxExtensionManager.get().clearForeground(this);
         boolean preservePipPlayback = pipHost.isShowing()
                 || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode());
-        pipHost.stopWatch();
         BrowserView activeWebView = getCurrentWebView();
         if (!preservePipPlayback && activeWebView != null) {
             try {

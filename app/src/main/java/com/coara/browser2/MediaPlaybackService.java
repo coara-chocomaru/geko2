@@ -237,7 +237,13 @@ public final class MediaPlaybackService extends Service {
 
             @Override
             public void onStop(GeckoSession sourceSession, MediaSession changedSession) {
-                if (sourceSession == geckoSession) {
+                if (sourceSession != geckoSession) {
+                    return;
+                }
+                if (PictureInPictureHost.isPipShowing()) {
+                    PictureInPictureHost.notePipMediaEnded();
+                    onPlaybackState(app, geckoSession, changedSession, false, false, currentRetainedTitle(), currentRetainedArtist());
+                } else {
                     PictureInPictureHost.closeForSession(geckoSession);
                     onPlaybackState(app, geckoSession, changedSession, false, true, currentRetainedTitle(), currentRetainedArtist());
                     releaseRetainedSession(geckoSession);
@@ -246,7 +252,13 @@ public final class MediaPlaybackService extends Service {
 
             @Override
             public void onDeactivated(GeckoSession sourceSession, MediaSession changedSession) {
-                if (sourceSession == geckoSession) {
+                if (sourceSession != geckoSession) {
+                    return;
+                }
+                if (PictureInPictureHost.isPipShowing()) {
+                    PictureInPictureHost.notePipMediaEnded();
+                    onPlaybackState(app, geckoSession, changedSession, false, false, currentRetainedTitle(), currentRetainedArtist());
+                } else {
                     PictureInPictureHost.closeForSession(geckoSession);
                     onPlaybackState(app, geckoSession, changedSession, false, true, currentRetainedTitle(), currentRetainedArtist());
                     releaseRetainedSession(geckoSession);
@@ -731,10 +743,16 @@ public final class MediaPlaybackService extends Service {
         }
         try {
             if (ACTION_PLAY.equals(action)) {
+                com.coara.browser2.PictureInPictureHost.noteUserPlay();
                 playing = true;
                 transientFocusLoss = false;
-                session.play();
-                presentState(false);
+                com.coara.browser2.PictureInPictureHost.playPipMediaIfEnded(() -> {
+                    try {
+                        session.play();
+                        presentState(false);
+                    } catch (RuntimeException ignored) {
+                    }
+                });
             } else if (ACTION_PAUSE.equals(action)) {
                 PictureInPictureHost.noteUserPause();
                 playing = false;
@@ -742,9 +760,9 @@ public final class MediaPlaybackService extends Service {
                 session.pause();
                 presentState(false);
             } else if (ACTION_SEEK_BACK.equals(action)) {
-                session.seekBackward();
+                PictureInPictureHost.seekPipMedia(-10, () -> session.seekBackward());
             } else if (ACTION_SEEK_FORWARD.equals(action)) {
-                session.seekForward();
+                PictureInPictureHost.seekPipMedia(10, () -> session.seekForward());
             }
         } catch (RuntimeException ignored) {
         }
