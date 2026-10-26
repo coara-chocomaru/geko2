@@ -901,6 +901,8 @@ public final class MediaPlaybackService extends Service {
             long actions = android.media.session.PlaybackState.ACTION_PLAY
                     | android.media.session.PlaybackState.ACTION_PAUSE
                     | android.media.session.PlaybackState.ACTION_PLAY_PAUSE
+                    | android.media.session.PlaybackState.ACTION_REWIND
+                    | android.media.session.PlaybackState.ACTION_FAST_FORWARD
                     | android.media.session.PlaybackState.ACTION_STOP;
             android.media.session.PlaybackState state = new android.media.session.PlaybackState.Builder()
                     .setActions(actions)
@@ -951,16 +953,20 @@ public final class MediaPlaybackService extends Service {
                 .setDeleteIntent(controlIntent(this, ACTION_DISMISS, 7406))
                 .setShowWhen(false)
                 .setPriority(Notification.PRIORITY_LOW);
+        builder.addAction(new Notification.Action.Builder(android.R.drawable.ic_media_rew,
+                "巻き戻し", controlIntent(this, ACTION_SEEK_BACK, 7407)).build());
         builder.addAction(new Notification.Action.Builder(
                 playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
                 playing ? "一時停止" : "再生",
                 controlIntent(this, playing ? ACTION_PAUSE : ACTION_PLAY, playing ? 7403 : 7404)).build());
+        builder.addAction(new Notification.Action.Builder(android.R.drawable.ic_media_ff,
+                "早送り", controlIntent(this, ACTION_SEEK_FORWARD, 7408)).build());
         builder.addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel,
                 "停止", controlIntent(this, ACTION_STOP, 7405)).build());
         if (platformMediaSession != null) {
             builder.setStyle(new Notification.MediaStyle()
                     .setMediaSession(platformMediaSession.getSessionToken())
-                    .setShowActionsInCompactView(0, 1));
+                    .setShowActionsInCompactView(0, 1, 2));
         }
         return builder.build();
     }

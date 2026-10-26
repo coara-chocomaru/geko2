@@ -29,6 +29,7 @@ public final class PictureInPictureHost {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final long DISMISS_CHECK_DELAY_MS = 350L;
     private static final long ENTER_TIMEOUT_MS = 2500L;
+    private static final long COMPOSITOR_KICK_DELAY_MS = 400L;
     private static WeakReference<PictureInPictureHost> current = new WeakReference<>(null);
 
     private final Activity activity;
@@ -41,6 +42,16 @@ public final class PictureInPictureHost {
         @Override
         public void run() {
             finishExit();
+        }
+    };
+    private final Runnable compositorKick = new Runnable() {
+        @Override
+        public void run() {
+            BrowserView view = sourceView.get();
+            if (inPip && view != null && !view.isDestroyed()) {
+                keepSessionActive(view);
+                notifyCompositor(view, true);
+            }
         }
     };
     private final Runnable enterTimeout = new Runnable() {
@@ -193,10 +204,12 @@ public final class PictureInPictureHost {
 
     private void abortEnter() {
         MAIN.removeCallbacks(enterTimeout);
+        MAIN.removeCallbacks(compositorKick);
         BrowserView view = sourceView.get();
         entering = false;
         inPip = false;
         if (view != null) {
+            notifyCompositor(view, false);
             PictureInPictureLayout.exit(view);
             view.setPictureInPictureActive(false);
         }
@@ -220,7 +233,10 @@ public final class PictureInPictureHost {
             setChrome(true);
             view.setPictureInPictureActive(true);
             PictureInPictureLayout.enter(view);
+            notifyCompositor(view, true);
             refreshParams();
+            MAIN.removeCallbacks(compositorKick);
+            MAIN.postDelayed(compositorKick, COMPOSITOR_KICK_DELAY_MS);
             return;
         }
         if (!inPip && !entering) {
@@ -229,12 +245,39 @@ public final class PictureInPictureHost {
         entering = false;
         inPip = false;
         setChrome(false);
+        MAIN.removeCallbacks(compositorKick);
         BrowserView view = sourceView.get();
         if (view != null) {
+            notifyCompositor(view, false);
             PictureInPictureLayout.exit(view);
         }
         MAIN.removeCallbacks(dismissCheck);
         MAIN.postDelayed(dismissCheck, DISMISS_CHECK_DELAY_MS);
+    }
+
+    private static void keepSessionActive(BrowserView view) {
+        org.mozilla.geckoview.GeckoSession session = view.getGeckoSession();
+        if (session == null) {
+            return;
+        }
+        try {
+            session.getSessionPictureInPicture().setKeepActive(true);
+            session.getSettings().setSuspendMediaWhenInactive(false);
+            session.setActive(true);
+            session.setPriorityHint(org.mozilla.geckoview.GeckoSession.PRIORITY_HIGH);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void notifyCompositor(BrowserView view, boolean enabled) {
+        org.mozilla.geckoview.GeckoSession session = view.getGeckoSession();
+        if (session == null) {
+            return;
+        }
+        try {
+            session.getCompositorController().onPipModeChanged(enabled);
+        } catch (Throwable ignored) {
+        }
     }
 
     private void finishExit() {
@@ -279,8 +322,10 @@ public final class PictureInPictureHost {
     public void onDestroy() {
         MAIN.removeCallbacks(enterTimeout);
         MAIN.removeCallbacks(dismissCheck);
+        MAIN.removeCallbacks(compositorKick);
         BrowserView view = sourceView.get();
         if (view != null && (inPip || entering)) {
+            notifyCompositor(view, false);
             PictureInPictureLayout.exit(view);
             view.setPictureInPictureActive(false);
         }
