@@ -421,7 +421,10 @@ public class BrowserView extends GeckoView {
     private void notifyMediaState(MediaSession mediaSession, boolean playing, boolean stopped) {
         BrowserClient c = client;
         if (c != null) {
-            c.onMediaPlaybackChanged(this, mediaSession, playing, stopped, mediaDisplayTitle(), mediaDisplayArtist());
+            try {
+                c.onMediaPlaybackChanged(this, mediaSession, playing, stopped, mediaDisplayTitle(), mediaDisplayArtist());
+            } catch (RuntimeException ignored) {
+            }
         }
     }
 
@@ -521,12 +524,18 @@ public class BrowserView extends GeckoView {
         pipRequestTokenReceived = false;
         pictureInPicturePending = false;
         pipNoVideoFallback = null;
-        com.coara.browser2.util.PageTranslator.releaseForView(this);
+        try {
+            com.coara.browser2.util.PageTranslator.releaseForView(this);
+        } catch (RuntimeException ignored) {
+        }
         findToken++;
         pendingFindRequests.clear();
         cancelDeferredFindClear();
         failPendingEvals();
-        BrowserEngine.get().getAgent().unregister(retained);
+        try {
+            BrowserEngine.get().getAgent().unregister(retained);
+        } catch (RuntimeException ignored) {
+        }
         try {
             retained.getSessionPictureInPicture().setKeepActive(true);
             retained.getSettings().setSuspendMediaWhenInactive(false);
@@ -1093,39 +1102,68 @@ public class BrowserView extends GeckoView {
     }
 
     public void onPause() {
+        if (destroyed) {
+            return;
+        }
         paused = true;
-        if (session != null) {
-            boolean keepBackgroundMedia = activeMediaSession != null
-                    && com.coara.browser2.MediaPlaybackService.isActiveSession(activeMediaSession);
-            if (pictureInPictureActive || pictureInPicturePending) {
-                session.getSessionPictureInPicture().setKeepActive(true);
-                session.setPriorityHint(GeckoSession.PRIORITY_HIGH);
-                session.setActive(true);
-                com.coara.browser2.fx.FxExtensionManager.get().onTabActive(session, true);
-            } else if (keepBackgroundMedia) {
-                session.getSessionPictureInPicture().setKeepActive(true);
-                session.getSettings().setSuspendMediaWhenInactive(false);
-                session.setPriorityHint(GeckoSession.PRIORITY_HIGH);
-                session.setActive(true);
-                com.coara.browser2.fx.FxExtensionManager.get().onTabActive(session, false);
-            } else {
-                session.getSessionPictureInPicture().setKeepActive(false);
-                session.getSettings().setSuspendMediaWhenInactive(true);
-                session.setPriorityHint(GeckoSession.PRIORITY_DEFAULT);
-                session.setActive(false);
-                com.coara.browser2.fx.FxExtensionManager.get().onTabActive(session, false);
-            }
+        GeckoSession current = session;
+        if (current == null) {
+            return;
+        }
+        boolean keepPip = pictureInPictureActive || pictureInPicturePending || pipRequestPending;
+        boolean keepBackgroundMedia = activeMediaSession != null
+                && com.coara.browser2.MediaPlaybackService.isActiveSession(activeMediaSession);
+        boolean keepActive = keepPip || keepBackgroundMedia;
+        try {
+            current.getSessionPictureInPicture().setKeepActive(keepActive);
+        } catch (Throwable ignored) {
+        }
+        try {
+            current.getSettings().setSuspendMediaWhenInactive(!keepActive);
+        } catch (Throwable ignored) {
+        }
+        try {
+            current.setPriorityHint(keepActive ? GeckoSession.PRIORITY_HIGH : GeckoSession.PRIORITY_DEFAULT);
+        } catch (Throwable ignored) {
+        }
+        try {
+            current.setActive(keepActive);
+        } catch (Throwable ignored) {
+        }
+        try {
+            com.coara.browser2.fx.FxExtensionManager.get().onTabActive(current, keepPip);
+        } catch (Throwable ignored) {
         }
     }
 
     public void onResume() {
+        if (destroyed) {
+            return;
+        }
         paused = false;
-        if (session != null) {
-            session.getSessionPictureInPicture().setKeepActive(pictureInPictureActive || pictureInPicturePending);
-            session.getSettings().setSuspendMediaWhenInactive(!mediaPlaying && !pictureInPictureActive && !pictureInPicturePending);
-            session.setActive(true);
-            session.setPriorityHint(GeckoSession.PRIORITY_HIGH);
-            com.coara.browser2.fx.FxExtensionManager.get().onTabActive(session, true);
+        GeckoSession current = session;
+        if (current == null) {
+            return;
+        }
+        try {
+            current.getSessionPictureInPicture().setKeepActive(pictureInPictureActive || pictureInPicturePending);
+        } catch (Throwable ignored) {
+        }
+        try {
+            current.getSettings().setSuspendMediaWhenInactive(!mediaPlaying && !pictureInPictureActive && !pictureInPicturePending);
+        } catch (Throwable ignored) {
+        }
+        try {
+            current.setActive(true);
+        } catch (Throwable ignored) {
+        }
+        try {
+            current.setPriorityHint(GeckoSession.PRIORITY_HIGH);
+        } catch (Throwable ignored) {
+        }
+        try {
+            com.coara.browser2.fx.FxExtensionManager.get().onTabActive(current, true);
+        } catch (Throwable ignored) {
         }
     }
 
@@ -2265,13 +2303,19 @@ public class BrowserView extends GeckoView {
                 main.removeCallbacks(item.timeout);
             }
             if (item.callback != null) {
-                item.callback.onReceiveValue("null");
+                try {
+                    item.callback.onReceiveValue("null");
+                } catch (RuntimeException ignored) {
+                }
             }
         }
         List<ValueCallback<String>> cbs = new ArrayList<>(evalCallbacks.values());
         evalCallbacks.clear();
         for (ValueCallback<String> cb : cbs) {
-            cb.onReceiveValue("null");
+            try {
+                cb.onReceiveValue("null");
+            } catch (RuntimeException ignored) {
+            }
         }
     }
 
@@ -2279,19 +2323,22 @@ public class BrowserView extends GeckoView {
         if (destroyed) {
             return;
         }
+        destroyed = true;
         MediaSession mediaSessionToStop = activeMediaSession;
         activeMediaSession = null;
         mediaPlaying = false;
         if (mediaSessionToStop != null) {
             notifyMediaState(mediaSessionToStop, false, true);
         }
-        destroyed = true;
         pipRequestGeneration++;
         pipRequestPending = false;
         pipRequestTokenReceived = false;
         pictureInPicturePending = false;
         pipNoVideoFallback = null;
-        com.coara.browser2.util.PageTranslator.releaseForView(this);
+        try {
+            com.coara.browser2.util.PageTranslator.releaseForView(this);
+        } catch (RuntimeException ignored) {
+        }
         findToken++;
         pendingFindRequests.clear();
         cancelDeferredFindClear();
@@ -2299,7 +2346,10 @@ public class BrowserView extends GeckoView {
         GeckoSession s = session;
         session = null;
         if (s != null) {
-            BrowserEngine.get().getAgent().unregister(s);
+            try {
+                BrowserEngine.get().getAgent().unregister(s);
+            } catch (RuntimeException ignored) {
+            }
             try {
                 releaseSession();
             } catch (Throwable ignored) {
