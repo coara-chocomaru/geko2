@@ -4,6 +4,86 @@
     if (G.__coaraAgent) {
         return;
     }
+
+    function installYoutubePipCompatibility() {
+        try {
+            var host = String(location.hostname || "").toLowerCase();
+            if (host !== "youtube.com" && host.slice(-12) !== ".youtube.com") {
+                return;
+            }
+            var page = G.wrappedJSObject || G;
+            if (!page || typeof exportFunction !== "function" || !page.Document
+                    || G.__coaraYoutubePipCompatibilityInstalled) {
+                return;
+            }
+            var originalWidth = null;
+            var originalHeight = null;
+            function patchDimension(name, screenName) {
+                var descriptor = Object.getOwnPropertyDescriptor(page, name);
+                if (!descriptor || typeof descriptor.get !== "function" || !descriptor.configurable) {
+                    return;
+                }
+                var original = descriptor.get;
+                if (name === "outerWidth") {
+                    originalWidth = original;
+                } else {
+                    originalHeight = original;
+                }
+                var getter = exportFunction(function () {
+                    var actual = original();
+                    var target = screen[screenName];
+                    if (actual < target / 2) {
+                        return target;
+                    }
+                    return actual;
+                }, G);
+                Object.defineProperty(page, name, {
+                    configurable: descriptor.configurable,
+                    enumerable: descriptor.enumerable,
+                    get: getter,
+                    set: descriptor.set
+                });
+            }
+            patchDimension("outerWidth", "width");
+            patchDimension("outerHeight", "height");
+            try {
+                var proto = page.Document.prototype;
+                var descriptor = Object.getOwnPropertyDescriptor(proto, "exitFullscreen");
+                if (descriptor && typeof descriptor.value === "function" && descriptor.configurable
+                        && originalWidth && originalHeight) {
+                    var originalExitFullscreen = descriptor.value;
+                    var replacement = exportFunction(function () {
+                        var active = false;
+                        try {
+                            var pip = G.__coaraPip;
+                            active = !!(pip && pip.on);
+                            if (!active) {
+                                active = originalWidth() < screen.width / 2
+                                        && originalHeight() < screen.height / 2;
+                            }
+                        } catch (e) {
+                        }
+                        if (active) {
+                            return undefined;
+                        }
+                        return originalExitFullscreen.apply(this);
+                    }, G);
+                    Object.defineProperty(proto, "exitFullscreen", {
+                        configurable: descriptor.configurable,
+                        enumerable: descriptor.enumerable,
+                        writable: descriptor.writable,
+                        value: replacement
+                    });
+                }
+            } catch (e) {
+            }
+            G.__coaraYoutubePipCompatibilityInstalled = true;
+        } catch (e) {
+        }
+    }
+
+    installYoutubePipCompatibility();
+
     var APP = "coaraPage";
     var isTop = false;
     try {
