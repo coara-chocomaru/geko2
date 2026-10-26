@@ -192,7 +192,9 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
     private boolean defaultLoadsImagesAutomaticallyInitialized = false;
     private boolean fullScreenActive = false;
     private BrowserView fullScreenView = null;
-    private final PictureInPictureHost pipHost = new PictureInPictureHost(this);
+    private final PictureInPictureHost pipHost = new PictureInPictureHost(this, this::applyPictureInPictureChrome);
+    private int pipPreviousToolbarVisibility = View.VISIBLE;
+    private int pipPreviousProgressVisibility = View.INVISIBLE;
     private int fullScreenPreviousOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
     private boolean pluginReloadPending = false;
     private boolean pluginReloadRunning = false;
@@ -677,9 +679,29 @@ public class SecretActivity extends AppCompatActivity implements PluginHost, Plu
         }
     }
 
+    private void applyPictureInPictureChrome(boolean pip) {
+        if (pip) {
+            pipPreviousToolbarVisibility = toolbar != null ? toolbar.getVisibility() : View.VISIBLE;
+            pipPreviousProgressVisibility = pageProgressBar != null ? pageProgressBar.getVisibility() : View.INVISIBLE;
+            if (toolbar != null) {
+                toolbar.setVisibility(View.GONE);
+            }
+            if (pageProgressBar != null) {
+                pageProgressBar.setVisibility(View.GONE);
+            }
+        } else {
+            if (toolbar != null) {
+                toolbar.setVisibility(fullScreenActive ? View.GONE : pipPreviousToolbarVisibility);
+            }
+            if (pageProgressBar != null) {
+                pageProgressBar.setVisibility(pipPreviousProgressVisibility);
+            }
+        }
+    }
+
     @Override
     public void startActivityForResult(Intent intent, int requestCode, Bundle options) {
-        PictureInPictureHost.markInternalLaunch(this, intent);
+        PictureInPictureHost.markInternalLaunch(this, intent, requestCode);
         super.startActivityForResult(intent, requestCode, options);
     }
 
