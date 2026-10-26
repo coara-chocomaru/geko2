@@ -15,7 +15,7 @@ public final class PictureInPictureLayout {
             + "clip-path:none!important;mask:none!important;backdrop-filter:none!important;will-change:auto!important;"
             + "overflow:visible!important;opacity:1!important;z-index:2147483647!important}"
             + "html.__cpr,body.__cpr{overflow:hidden!important;background:#000!important}';"
-            + "var best=null,blind=null,roots=[],els=[],styles=[];"
+            + "var best=null,blind=null,roots=[],els=[],styles=[],visited=[];"
             + "function mark(el,cls){try{el.classList.add(cls);els.push([el,cls])}catch(e){}}"
             + "function style(root){if(roots.indexOf(root)>=0)return;roots.push(root);"
             + "try{var d=root.ownerDocument||root;var st=d.createElement('style');st.textContent=CSS;"
@@ -23,7 +23,7 @@ public final class PictureInPictureLayout {
             + "function lock(d){try{if(d.documentElement)mark(d.documentElement,'__cpr');if(d.body)mark(d.body,'__cpr')}catch(e){}}"
             + "function climb(el){var n=el,first=true;while(n){if(n.nodeType===1){mark(n,first?'__cpt':'__cpa');first=false;"
             + "style(n.getRootNode());lock(n.ownerDocument)}n=n.parentNode||n.host}}"
-            + "function scan(d,path,depth){if(!d||depth>5)return;var vids=[];"
+            + "function scan(d,path,depth){if(!d||depth>5||visited.indexOf(d)>=0)return;visited.push(d);var vids=[];"
             + "try{vids=d.querySelectorAll('video')}catch(e){}"
             + "for(var i=0;i<vids.length;i++){var v=vids[i],r=null,playing=false;"
             + "try{r=v.getBoundingClientRect();playing=!v.paused&&!v.ended&&v.readyState>=2}catch(e){}"
@@ -33,7 +33,9 @@ public final class PictureInPictureLayout {
             + "try{fd=f.contentDocument;rr=f.getBoundingClientRect()}catch(e){}"
             + "if(fd){path.push(f);scan(fd,path,depth+1);path.pop()}"
             + "else if(rr&&rr.width>=160&&rr.height>=90){var ar=rr.width*rr.height;"
-            + "if(!blind||ar>blind.a)blind={el:f,p:path.slice(),a:ar}}}}"
+            + "if(!blind||ar>blind.a)blind={el:f,p:path.slice(),a:ar}}}"
+            + "var hosts=[];try{hosts=d.querySelectorAll('*')}catch(e){}"
+            + "for(var z=0;z<hosts.length;z++){try{if(hosts[z].shadowRoot)scan(hosts[z].shadowRoot,path,depth+1)}catch(e){}}}"
             + "scan(document,[],0);"
             + "var t=best||blind;if(!t)return false;"
             + "for(var k=0;k<t.p.length;k++){climb(t.p[k])}"
@@ -66,6 +68,22 @@ public final class PictureInPictureLayout {
             + "var p=S.video.play();if(p&&p.catch){p.catch(function(){})}return true"
             + "}catch(e){return false}})()";
 
+    private static final String RESTART_POSITION_SCRIPT = "(function(){try{"
+            + "var S=window.__coaraPip,v=S&&S.video;if(!v)return false;"
+            + "var ended=false;try{ended=!!v.ended||(isFinite(v.duration)&&v.duration>0&&v.currentTime>=v.duration-0.35)}catch(e){}"
+            + "if(ended){v.currentTime=0;return true}return false"
+            + "}catch(e){return false}})()";
+
+    private static final String SEEK_BACK_SCRIPT = "(function(){try{"
+            + "var S=window.__coaraPip,v=S&&S.video;if(!v||!isFinite(v.duration)||v.duration<=0||!isFinite(v.currentTime))return false;"
+            + "v.currentTime=Math.max(0,v.currentTime-10);return true"
+            + "}catch(e){return false}})()";
+
+    private static final String SEEK_FORWARD_SCRIPT = "(function(){try{"
+            + "var S=window.__coaraPip,v=S&&S.video;if(!v||!isFinite(v.duration)||v.duration<=0||!isFinite(v.currentTime))return false;"
+            + "v.currentTime=Math.min(v.duration,v.currentTime+10);return true"
+            + "}catch(e){return false}})()";
+
     private PictureInPictureLayout() {
     }
 
@@ -79,6 +97,43 @@ public final class PictureInPictureLayout {
 
     public static void resume(BrowserView view) {
         run(view, RESUME_SCRIPT);
+    }
+
+    public static void restartPosition(BrowserView view) {
+        run(view, RESTART_POSITION_SCRIPT);
+    }
+
+    public static void restartPosition(BrowserView view, ValueCallback<String> callback) {
+        if (view == null || view.isDestroyed()) {
+            callback.onReceiveValue("false");
+            return;
+        }
+        try {
+            view.evaluateJavascript(RESTART_POSITION_SCRIPT, callback);
+        } catch (Throwable error) {
+            callback.onReceiveValue("false");
+        }
+    }
+
+    public static void seekBy(BrowserView view, int seconds, ValueCallback<String> callback) {
+        if (view == null || view.isDestroyed()) {
+            callback.onReceiveValue("false");
+            return;
+        }
+        String script;
+        if (seconds < 0) {
+            script = SEEK_BACK_SCRIPT;
+        } else if (seconds > 0) {
+            script = SEEK_FORWARD_SCRIPT;
+        } else {
+            callback.onReceiveValue("false");
+            return;
+        }
+        try {
+            view.evaluateJavascript(script, callback);
+        } catch (Throwable error) {
+            callback.onReceiveValue("false");
+        }
     }
 
     public static void probe(BrowserView view, ValueCallback<String> callback) {
