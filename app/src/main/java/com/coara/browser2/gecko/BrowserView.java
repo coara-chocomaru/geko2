@@ -358,6 +358,12 @@ public class BrowserView extends GeckoView {
                     return;
                 }
                 mediaPlaying = false;
+                if (pictureInPictureActive || pictureInPicturePending) {
+                    com.coara.browser2.PictureInPictureHost.notePipMediaEnded();
+                    sourceSession.getSettings().setSuspendMediaWhenInactive(false);
+                    notifyMediaState(mediaSession, false, false);
+                    return;
+                }
                 sourceSession.getSettings().setSuspendMediaWhenInactive(true);
                 notifyMediaState(mediaSession, false, true);
                 com.coara.browser2.PictureInPictureHost.closeForSource(BrowserView.this);
@@ -367,6 +373,13 @@ public class BrowserView extends GeckoView {
             @Override
             public void onDeactivated(GeckoSession sourceSession, MediaSession mediaSession) {
                 if (sourceSession != session || destroyed || activeMediaSession != mediaSession) {
+                    return;
+                }
+                if (pictureInPictureActive || pictureInPicturePending) {
+                    com.coara.browser2.PictureInPictureHost.notePipMediaEnded();
+                    mediaPlaying = false;
+                    sourceSession.getSettings().setSuspendMediaWhenInactive(false);
+                    notifyMediaState(mediaSession, false, false);
                     return;
                 }
                 boolean wasPlaying = mediaPlaying;
