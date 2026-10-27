@@ -16,6 +16,7 @@
     void log(...);
     java.lang.String readTail(int);
     java.lang.String readFor(java.lang.String,int);
+    void exportTo(java.io.OutputStream);
 }
 
 -assumevalues class com.coara.browser2.plugin.PluginLogger {
