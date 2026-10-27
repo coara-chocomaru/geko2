@@ -1,21 +1,28 @@
--keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod,SourceFile,LineNumberTable
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod,Exceptions
 -renamesourcefileattribute SourceFile
--repackageclasses ''
+-dontrepackage
 
 -keep,allowshrinking,allowoptimization class androidx.appcompat.widget.ActionMenuPresenter$OverflowMenuButton
--keep,allowshrinking,allowoptimization class com.coara.browser2.MainActivity
--keep,allowshrinking,allowoptimization class com.coara.browser2.plugin.**
--keep,allowshrinking,allowoptimization class com.coara.browser2.QrCodeActivity
--keep,allowshrinking,allowoptimization class com.coara.browser2.pagedl
--keep,allowshrinking,allowoptimization class com.coara.browser2.asciiart
--keep,allowshrinking,allowoptimization class com.coara.browser2.txtphoto
 
 -dontwarn org.yaml.snakeyaml.scanner.ScannerImpl
 
--assumenosideeffects class android.util.Log {
-    public static int v(...);
-    public static int d(...);
-    public static int i(...);
+-maximumremovedandroidloglevel 7
+
+-assumenosideeffects class java.lang.Throwable {
+    public void printStackTrace();
 }
 
--keep,allowoptimization class com.coara.browser2.PictureInPictureActivity
+-assumenosideeffects class com.coara.browser2.plugin.PluginLogger {
+    void log(...);
+    java.lang.String readTail(int);
+    java.lang.String readFor(java.lang.String,int);
+}
+
+-assumevalues class com.coara.browser2.plugin.PluginLogger {
+    java.lang.String readTail(int) return "";
+    java.lang.String readFor(java.lang.String,int) return "";
+}
+
+-assumenosideeffects class com.coara.browser2.BrowserApplication {
+    private void writeCrashLog(java.lang.Thread,java.lang.Throwable);
+}
