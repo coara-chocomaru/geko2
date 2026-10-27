@@ -37,7 +37,9 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 public final class PageTranslator {
 
@@ -1039,11 +1041,14 @@ public final class PageTranslator {
 
     private static ExecutorService executor() {
         if (netExecutor == null) {
-            netExecutor = Executors.newFixedThreadPool(4, runnable -> {
-                Thread thread = new Thread(runnable, "coara-translate");
-                thread.setDaemon(true);
-                return thread;
-            });
+            ThreadPoolExecutor pool = new ThreadPoolExecutor(4, 4, 30L, TimeUnit.SECONDS,
+                    new LinkedBlockingQueue<>(), runnable -> {
+                        Thread thread = new Thread(runnable, "coara-translate");
+                        thread.setDaemon(true);
+                        return thread;
+                    });
+            pool.allowCoreThreadTimeOut(true);
+            netExecutor = pool;
         }
         return netExecutor;
     }

@@ -35,7 +35,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 public final class DownloadFallbackManager {
     public static final class Spec {
@@ -81,11 +83,18 @@ public final class DownloadFallbackManager {
     }
 
     private static final ConcurrentHashMap<Long, Spec> SPECS = new ConcurrentHashMap<>();
-    private static final ExecutorService EXECUTOR = Executors.newCachedThreadPool(r -> {
-        Thread t = new Thread(r, "CoaraDownloadFallback");
-        t.setDaemon(true);
-        return t;
-    });
+    private static final ExecutorService EXECUTOR = createExecutor();
+
+    private static ExecutorService createExecutor() {
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(3, 3, 30L, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(), r -> {
+                    Thread t = new Thread(r, "CoaraDownloadFallback");
+                    t.setDaemon(true);
+                    return t;
+                });
+        executor.allowCoreThreadTimeOut(true);
+        return executor;
+    }
     private static final int MAX_REDIRECTS = 12;
     private static final int CONNECT_TIMEOUT_MS = 20000;
     private static final int READ_TIMEOUT_MS = 30000;
@@ -138,17 +147,18 @@ public final class DownloadFallbackManager {
 
     public static void startDownloadService(Context context, long downloadId) {
         if (context == null || downloadId <= 0) return;
+        Context applicationContext = context.getApplicationContext();
+        final Context safeContext = applicationContext == null ? context : applicationContext;
         try {
-            Context appContext = context.getApplicationContext();
-            Intent intent = new Intent(appContext, DownloadFallbackService.class);
+            Intent intent = new Intent(safeContext, DownloadFallbackService.class);
             intent.putExtra(DownloadFallbackService.EXTRA_DOWNLOAD_ID, downloadId);
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                appContext.startForegroundService(intent);
+                safeContext.startForegroundService(intent);
             } else {
-                appContext.startService(intent);
+                safeContext.startService(intent);
             }
         } catch (Exception e) {
-            EXECUTOR.execute(() -> runPersistedDownload(context, downloadId));
+            EXECUTOR.execute(() -> runPersistedDownload(safeContext, downloadId));
         }
     }
 
