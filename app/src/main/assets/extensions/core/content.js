@@ -93,7 +93,7 @@
     }
     var port = null;
     var outbox = [];
-    var styles = {};
+    var styles = Object.create(null);
     var iconSent = "";
 
     function connect() {

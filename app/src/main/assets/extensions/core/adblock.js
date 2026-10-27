@@ -2,12 +2,12 @@
     "use strict";
     var state = {
         on: false,
-        hosts: {},
-        paths: {},
+        hosts: Object.create(null),
+        paths: Object.create(null),
         prefixes: [],
         tokens: [],
-        second: {},
-        tabHosts: {},
+        second: Object.create(null),
+        tabHosts: Object.create(null),
         tabCount: 0,
         count: 0,
         reported: 0,
@@ -155,7 +155,7 @@
         }
         if (state.tabHosts[tabId] === undefined) {
             if (state.tabCount > 256) {
-                state.tabHosts = {};
+                state.tabHosts = Object.create(null);
                 state.tabCount = 0;
             }
             state.tabCount++;
@@ -224,11 +224,22 @@
     }
 
     function toSet(list) {
-        var o = {};
+        var o = Object.create(null);
         for (var i = 0; i < list.length; i++) {
             o[list[i]] = 1;
         }
         return o;
+    }
+
+    function toMap(value) {
+        var out = Object.create(null);
+        if (value && typeof value === "object") {
+            var keys = Object.keys(value);
+            for (var i = 0; i < keys.length; i++) {
+                out[keys[i]] = value[keys[i]];
+            }
+        }
+        return out;
     }
 
     function dropCosmetic() {
@@ -264,7 +275,7 @@
         if (on && m.rules) {
             var r = m.rules;
             state.hosts = toSet(r.hosts || []);
-            state.paths = r.paths || {};
+            state.paths = toMap(r.paths);
             state.prefixes = r.prefixes || [];
             state.tokens = r.tokens || [];
             state.second = toSet(r.second || []);

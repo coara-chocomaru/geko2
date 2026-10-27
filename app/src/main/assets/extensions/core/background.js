@@ -2,7 +2,7 @@
     "use strict";
     var APP = "coaraBg";
     var port = null;
-    var registered = { plugins: [], css: {} };
+    var registered = { plugins: [], css: Object.create(null) };
     var queue = Promise.resolve();
 
     function enqueue(job) {
