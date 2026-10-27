@@ -19,7 +19,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 public final class AmoClient {
 
@@ -35,11 +37,18 @@ public final class AmoClient {
     private static final int MAX_ICON_SIDE = 128;
     private static final int MAX_ICON_REDIRECTS = 3;
 
-    private static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(4, runnable -> {
-        Thread thread = new Thread(runnable, "coara-amo");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private static final ExecutorService EXECUTOR = createExecutor();
+
+    private static ExecutorService createExecutor() {
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(4, 4, 30L, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(), runnable -> {
+                    Thread thread = new Thread(runnable, "coara-amo");
+                    thread.setDaemon(true);
+                    return thread;
+                });
+        executor.allowCoreThreadTimeOut(true);
+        return executor;
+    }
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final LruCache<String, Bitmap> ICONS = new LruCache<String, Bitmap>(1024) {
         @Override
