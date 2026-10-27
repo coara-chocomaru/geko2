@@ -400,6 +400,9 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
         }
 
         pref = getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        if (pref.contains("offscreen_pre_raster")) {
+            pref.edit().remove("offscreen_pre_raster").apply();
+        }
         tabHistoryStore = new TabHistoryStore(getFilesDir(), MAX_TAB_HISTORY_SIZE);
         BrowserMenuController.setQuickActions(this, this::buildQuickActions);
         pluginManager = PluginManager.get(this);
@@ -4145,12 +4148,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             boolean bookmarked = currentUrl != null && isBookmarkedUrl(currentUrl);
             addBookmarkItem.setTitle(bookmarked ? "ブックマークを編集" : "ブックマーク登録");
         }
-        MenuItem offscreenPreRasterItem = menu.findItem(R.id.action_offscreen_pre_raster);
-        if (offscreenPreRasterItem != null) {
-            offscreenPreRasterItem.setChecked(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                    && BrowserVisualSettings.isOffscreenPreRasterEnabled(pref));
-            offscreenPreRasterItem.setEnabled(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M);
-        }
         MenuItem pictureInPictureItem = menu.findItem(R.id.action_picture_in_picture);
         if (pictureInPictureItem != null) {
             boolean supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
@@ -4196,17 +4193,6 @@ public class MainActivity extends AppCompatActivity implements PluginHost, Plugi
             return true;
         } else if (id == R.id.action_custom_theme) {
             startActivity(new Intent(MainActivity.this, BrowserThemeActivity.class));
-            return true;
-        } else if (id == R.id.action_offscreen_pre_raster) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                boolean enabled = !BrowserVisualSettings.isOffscreenPreRasterEnabled(pref);
-                BrowserVisualSettings.setOffscreenPreRasterEnabled(pref, enabled);
-                applyBrowserVisualSettingsToAllWebViews();
-                item.setChecked(enabled);
-                Toast.makeText(this, "先読みレンダリング " + (enabled ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
-            } else {
-                Toast.makeText(this, "Android 6.0以上で利用できます", Toast.LENGTH_SHORT).show();
-            }
             return true;
         } else if (id == R.id.action_dark_mode) {
             darkModeEnabled = !darkModeEnabled;
