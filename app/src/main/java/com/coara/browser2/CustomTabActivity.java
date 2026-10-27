@@ -438,8 +438,10 @@ public final class CustomTabActivity extends MainActivity {
             }
             int foreground = ColorUtils.calculateLuminance(toolbarColor) > 0.52 ? Color.BLACK : Color.WHITE;
             if (urlText != null) {
-                urlText.setTextColor(foreground);
-                urlText.setHintTextColor(foreground);
+                int urlForeground = com.coara.browser2.util.BrowserThemeManager.fieldContentColor(
+                        this, Color.parseColor("#15141A"));
+                urlText.setTextColor(urlForeground);
+                urlText.setHintTextColor(urlForeground);
             }
             if (customToolbar != null) {
                 Drawable navigation = customToolbar.getNavigationIcon();
@@ -664,8 +666,10 @@ public final class CustomTabActivity extends MainActivity {
         customToolbar.setBackgroundColor(toolbarColor);
         tintActionButton = getIntent().getBooleanExtra(CustomTabsIntent.EXTRA_TINT_ACTION_BUTTON, false);
         int foreground = ColorUtils.calculateLuminance(toolbarColor) > 0.52 ? Color.BLACK : Color.WHITE;
-        urlText.setTextColor(foreground);
-        urlText.setHintTextColor(foreground);
+        int urlForeground = com.coara.browser2.util.BrowserThemeManager.fieldContentColor(
+                this, Color.parseColor("#15141A"));
+        urlText.setTextColor(urlForeground);
+        urlText.setHintTextColor(urlForeground);
         urlText.setFocusable(false);
         urlText.setFocusableInTouchMode(false);
         urlText.setCursorVisible(false);
