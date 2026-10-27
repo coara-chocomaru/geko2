@@ -835,6 +835,10 @@ public final class PluginInstaller {
     private static void parseXml(byte[] data, Map<String, String> attrs, List<String> scripts,
                                  List<String> styles, String[] textTitle) throws Exception {
         XmlPullParser p = Xml.newPullParser();
+        try {
+            p.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false);
+        } catch (Exception ignored) {
+        }
         p.setInput(new ByteArrayInputStream(data), null);
         String currentTag = null;
         int ev = p.getEventType();

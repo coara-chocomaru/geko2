@@ -33,7 +33,9 @@ import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -99,7 +101,7 @@ public final class PluginManager {
     private final String token;
     private final Map<String, XhrState> xhrs = new ConcurrentHashMap<>();
     private final Map<String, WebExtParser.Messages> i18nCache = new HashMap<>();
-    private final ExecutorService xhrPool = Executors.newFixedThreadPool(3);
+    private final ExecutorService xhrPool = createXhrPool();
     private final Runnable clearMarkerRunnable = new Runnable() {
         @Override
         public void run() {
@@ -113,6 +115,13 @@ public final class PluginManager {
     private int runtimeVersion = 0;
     private long lastInjectionAt = 0L;
     private long lastMarkerWrite = 0L;
+
+    private static ExecutorService createXhrPool() {
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(3, 3, 30L, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>());
+        executor.allowCoreThreadTimeOut(true);
+        return executor;
+    }
 
     private PluginManager(Context context) {
         this.appContext = context.getApplicationContext();
