@@ -3,7 +3,7 @@ var id=coara.id;
 var manifestCache=null;
 var runtimeListeners=[];
 var changeListeners=[];
-var sessionStore={};
+var sessionStore=Object.create(null);
 function clone(v){
 if(v===undefined)return undefined;
 try{return JSON.parse(JSON.stringify(v));}catch(e){return v;}
@@ -28,6 +28,9 @@ function fire(changes,area){
 for(var i=0;i<changeListeners.length;i++){
 try{changeListeners[i](clone(changes),area);}catch(e){}
 }
+}
+function setOwn(o,k,v){
+Object.defineProperty(o,k,{value:v,writable:true,enumerable:true,configurable:true});
 }
 function makeArea(name,store){
 var P="ext:";
@@ -57,19 +60,20 @@ if(typeof keys==="function"){cb=keys;keys=null;}
 var res={},i;
 if(keys==null){
 var ks=allKeys();
-for(i=0;i<ks.length;i++)res[ks[i]]=readOne(ks[i]);
+for(i=0;i<ks.length;i++)setOwn(res,ks[i],readOne(ks[i]));
 }else if(typeof keys==="string"){
 var v=readOne(keys);
-if(v!==undefined)res[keys]=v;
+if(v!==undefined)setOwn(res,keys,v);
 }else if(Array.isArray(keys)){
 for(i=0;i<keys.length;i++){
 var v2=readOne(keys[i]);
-if(v2!==undefined)res[keys[i]]=v2;
+if(v2!==undefined)setOwn(res,keys[i],v2);
 }
 }else if(typeof keys==="object"){
 for(var k in keys){
+if(!Object.prototype.hasOwnProperty.call(keys,k))continue;
 var v3=readOne(k);
-res[k]=v3===undefined?clone(keys[k]):v3;
+setOwn(res,k,v3===undefined?clone(keys[k]):v3);
 }
 }
 return ret(res,cb);
@@ -77,9 +81,10 @@ return ret(res,cb);
 set:function(items,cb){
 var changes={};
 for(var k in items){
+if(!Object.prototype.hasOwnProperty.call(items,k))continue;
 var old=readOne(k);
 writeOne(k,items[k]);
-changes[k]={oldValue:old,newValue:clone(items[k])};
+setOwn(changes,k,{oldValue:old,newValue:clone(items[k])});
 }
 fire(changes,name);
 return ret(undefined,cb);
@@ -90,7 +95,7 @@ var changes={};
 for(var i=0;i<list.length;i++){
 var old=readOne(list[i]);
 removeOne(list[i]);
-changes[list[i]]={oldValue:old};
+setOwn(changes,list[i],{oldValue:old});
 }
 fire(changes,name);
 return ret(undefined,cb);
@@ -98,7 +103,7 @@ return ret(undefined,cb);
 clear:function(cb){
 var ks=allKeys(),changes={};
 for(var i=0;i<ks.length;i++){
-changes[ks[i]]={oldValue:readOne(ks[i])};
+setOwn(changes,ks[i],{oldValue:readOne(ks[i])});
 removeOne(ks[i]);
 }
 fire(changes,name);
@@ -167,7 +172,7 @@ getURL:getURL,
 getBackgroundPage:function(){return null;},
 inIncognitoContext:false
 },
-storage:{local:local,sync:sync,managed:makeArea("managed",{}),session:session,onChanged:onChanged},
+storage:{local:local,sync:sync,managed:makeArea("managed",Object.create(null)),session:session,onChanged:onChanged},
 i18n:{
 getMessage:function(key,subs){
 var arr=subs==null?null:(Array.isArray(subs)?subs:[subs]);

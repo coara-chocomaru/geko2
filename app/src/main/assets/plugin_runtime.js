@@ -93,9 +93,9 @@ if(typeof f!=="function")return;
 if(document.readyState!=="loading"){setTimeout(function(){safe(f);},0);}
 else{document.addEventListener("DOMContentLoaded",function(){safe(f);},{once:true});}
 }
-var cmds={};
+var cmds=Object.create(null);
 var cmdSeq=0;
-var cmdNames={};
+var cmdNames=Object.create(null);
 var cmdArmed=false;
 function resendCommands(){
 for(var k in cmdNames){

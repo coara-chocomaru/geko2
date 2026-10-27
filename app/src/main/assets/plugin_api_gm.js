@@ -8,12 +8,13 @@ version:"1.0",
 isIncognito:false,
 isFirstPartyIsolation:false
 };
-var __gmListeners={};
+var __gmListeners=Object.create(null);
 var __gmListenerSeq=0;
 function __gmFire(name,oldV,newV){
 var l=__gmListeners[name];
 if(!l)return;
 for(var id in l){
+if(!Object.prototype.hasOwnProperty.call(l,id))continue;
 try{l[id](name,oldV,newV,false);}catch(e){coara._rep("runtime",e&&e.message?e.message:String(e),e&&e.stack);}
 }
 }
@@ -42,12 +43,13 @@ function GM_listValues(){return coara.storage.keys();}
 function GM_addValueChangeListener(name,fn){
 if(typeof fn!=="function")return 0;
 var id=++__gmListenerSeq;
-(__gmListeners[name]=__gmListeners[name]||{})[id]=fn;
+(__gmListeners[name]=__gmListeners[name]||Object.create(null))[id]=fn;
 return id;
 }
 function GM_removeValueChangeListener(id){
 for(var n in __gmListeners){
-if(__gmListeners[n][id]){delete __gmListeners[n][id];}
+if(!Object.prototype.hasOwnProperty.call(__gmListeners,n))continue;
+if(__gmListeners[n]&&Object.prototype.hasOwnProperty.call(__gmListeners[n],id)){delete __gmListeners[n][id];}
 }
 }
 function GM_getResourceText(n){return coara.getResource(String(n));}
@@ -100,7 +102,7 @@ xmlHttpRequest:function(d){
 var h;
 var p=new Promise(function(res,rej){
 var o={};
-for(var k in d){o[k]=d[k];}
+for(var k in d){if(Object.prototype.hasOwnProperty.call(d,k))o[k]=d[k];}
 o.onload=function(r){res(r);};
 o.onerror=function(r){rej(r);};
 o.onabort=function(r){rej(r);};

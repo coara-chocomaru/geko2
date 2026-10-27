@@ -9,9 +9,9 @@ var outbox=[];
 var outboxChars=0;
 var MAX_OUTBOX_ITEMS=64;
 var MAX_OUTBOX_CHARS=4194304;
-var snaps={};
-var xhrDone={};
-var xhrStarted={};
+var snaps=Object.create(null);
+var xhrDone=Object.create(null);
+var xhrStarted=Object.create(null);
 var xhrDoneChars=0;
 var MAX_XHR_STARTED=64;
 var MAX_XHR_DONE_CHARS=16777216;
@@ -80,10 +80,18 @@ xhrDone[k]=v;
 xhrDoneChars=next+v.length;
 }
 function has(o,k){return Object.prototype.hasOwnProperty.call(o,k);}
+function copyMap(value){
+var out=Object.create(null);
+if(value&&typeof value==="object"){
+var keys=Object.keys(value);
+for(var i=0;i<keys.length;i++)out[keys[i]]=value[keys[i]];
+}
+return out;
+}
 function snapOf(id){
 var s=snaps[id];
 if(!s){
-s={s:{},r:{},u:{},i:{},l:""};
+s={s:Object.create(null),r:Object.create(null),u:Object.create(null),i:Object.create(null),l:""};
 snaps[id]=s;
 }
 return s;
@@ -109,7 +117,7 @@ return "1";
 case "skeys":
 return JSON.stringify(Object.keys(sn.s));
 case "sclear":
-sn.s={};
+sn.s=Object.create(null);
 post({t:"inv",tk:tk,id:id,op:op,a:a,b:b,c:c});
 return "1";
 case "res":
@@ -216,7 +224,7 @@ try{delete page[key];}catch(e){}
 G.__coaraPlg={
 run:function(id,tk,bridge,snap,src){
 try{
-if(!has(snaps,id)&&snap)snaps[id]={s:snap.s||{},r:snap.r||{},u:snap.u||{},i:snap.i||{},l:snap.l||""};
+if(!has(snaps,id)&&snap)snaps[id]={s:copyMap(snap.s),r:copyMap(snap.r),u:copyMap(snap.u),i:copyMap(snap.i),l:snap.l||""};
 var bridgeKey=String(bridge);
 var bridgeObject=ensureBridge(bridgeKey,String(tk),String(id));
 clearCommands(bridgeKey);
